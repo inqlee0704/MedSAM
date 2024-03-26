@@ -119,7 +119,7 @@ def convert_npz_to_npy(npz_path):
             )  # normalize to [0, 1], (H, W, 3)
             assert img_01.shape[:2] == gts.shape
 
-            if np.sum(gt_i) != 0:
+            if np.sum(gts) != 0:
                 np.save(join(npy_dir, "imgs", name + ".npy"), img_01)
                 np.save(join(npy_dir, "gts", name + ".npy"), gts)
     except Exception as e:
