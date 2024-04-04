@@ -1,4 +1,6 @@
 # %%
+import pickle
+from file_io import rle_decode_multivalue, rle_encode_multivalue
 import glob
 import multiprocessing as mp
 import os
@@ -11,9 +13,9 @@ from matplotlib import pyplot as plt
 from tqdm import tqdm
 
 # %%
-npz_dir = "/data1/inqlee0704/medsam/train/CVPR24-MedSAMLaptopData/train_npz"
-npy_dir = "/data1/inqlee0704/medsam/train/CVPR24-MedSAMLaptopData/train_npy_256"
-num_workers = 16
+npz_dir = "/mnt/e/PUBLIC/DATA/cvpr2024"
+npy_dir = "/mnt/d/Datas/competition/cvpr2024/train"
+num_workers = 8
 do_resize_256 = True  # whether to resize images and masks to 256x256
 # makedirs(npy_dir, exist_ok=True)
 
@@ -89,14 +91,25 @@ def convert_npz_to_npy(npz_path):
                 gt_i = np.uint8(gt_i)
                 assert img_01.shape[:2] == gt_i.shape
                 if np.sum(gt_i) != 0:
-                    np.save(
-                        join(npy_dir, "imgs", name + "-" + str(i).zfill(3) + ".npy"),
-                        img_01,
+                    img_path = join(
+                        npy_dir, "imgs", name + "-" + str(i).zfill(3) + ".png"
                     )
-                    np.save(
-                        join(npy_dir, "gts", name + "-" + str(i).zfill(3) + ".npy"),
-                        gt_i,
+                    img_01 = (img_01 * 255).astype(np.uint8)
+                    cv2.imwrite(img_path, img_01)
+
+                    gt_path = join(
+                        npy_dir, "gts", name + "-" + str(i).zfill(3) + ".pkl"
                     )
+                    encoded = rle_encode_multivalue(gt_i)
+                    if len(pickle.dumps(encoded)) < 256 * 256 * 2:
+                        with open(gt_path, "wb") as f:
+                            pickle.dump(encoded, f)
+                    else:
+                        gt_path = join(
+                            npy_dir, "gts", name + "-" + str(i).zfill(3) + ".npy"
+                        )
+                        np.save(gt_path, gt_i)
+
         else:  ## 2D image
             if len(imgs.shape) < 3:
                 img_3c = np.repeat(imgs[:, :, None], 3, axis=-1)
@@ -120,8 +133,19 @@ def convert_npz_to_npy(npz_path):
             assert img_01.shape[:2] == gts.shape
 
             if np.sum(gts) != 0:
-                np.save(join(npy_dir, "imgs", name + ".npy"), img_01)
-                np.save(join(npy_dir, "gts", name + ".npy"), gts)
+                img_path = join(npy_dir, "imgs", name + ".png")
+                gt_path = join(npy_dir, "gts", name + ".pkl")
+                img_01 = (img_01 * 255).astype(np.uint8)
+                cv2.imwrite(img_path, img_01)
+
+                encoded = rle_encode_multivalue(gts)
+                if len(pickle.dumps(encoded)) < 256 * 256 * 2:
+                    with open(gt_path, "wb") as f:
+                        pickle.dump(encoded, f)
+                else:
+                    gt_path = join(npy_dir, "gts", name + ".npy")
+                    np.save(gt_path, gts)
+
     except Exception as e:
         print(e)
         print(npz_path)
@@ -129,6 +153,8 @@ def convert_npz_to_npy(npz_path):
 
 if __name__ == "__main__":
     npz_paths = glob.glob(join(npz_dir, "**/*.npz"), recursive=True)
+    # for npz_path in npz_paths:
+    #     convert_npz_to_npy(npz_path)
 
     with mp.Pool(num_workers) as p:
         r = list(tqdm(p.imap(convert_npz_to_npy, npz_paths), total=len(npz_paths)))
