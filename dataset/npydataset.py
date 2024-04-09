@@ -84,7 +84,7 @@ class NpyDataset(Dataset):
             gt,
             (img_resize.shape[1], img_resize.shape[0]),
             interpolation=cv2.INTER_NEAREST,
-        ).astype(np.uint8)
+        )
         gt = self.pad_image(gt)  # (256, 256)
         label_ids = np.unique(gt)[1:]
         try:
