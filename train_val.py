@@ -24,6 +24,7 @@ from tqdm import tqdm, trange
 from dataset.npydataset import NpyDataset
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
+from dataset.compressed import EncodedDataset
 
 torch.cuda.empty_cache()
 os.environ["OMP_NUM_THREADS"] = "4"  # export OMP_NUM_THREADS=4
@@ -182,11 +183,10 @@ def main():
     seg_loss = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction="mean")
     ce_loss = nn.BCEWithLogitsLoss(reduction="mean")
     iou_loss = nn.MSELoss(reduction="mean")
+    train_dataset = EncodedDataset(data_root, data_aug=True, mode='train')
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
-    train_dataset = NpyDataset(
-        data_root=data_root, data_aug=True, mode="train", debug=debug
-    )
-    valid_dataset = NpyDataset(data_root, data_aug=False, mode="valid", debug=debug)
+    valid_dataset = EncodedDataset(data_root, data_aug=False, mode="valid")
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
     checkpoint = "workdir/temp.pth"
@@ -204,15 +204,10 @@ def main():
 
     train_loss_list = []
     valid_loss_list = []
+
     for epoch in range(start_epoch + 1, num_epochs):
-        train_dataset.reload(samples=1000)  # sample per modality
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=batch_size,
-            shuffle=True,
-            num_workers=num_workers,
-            pin_memory=True,
-        )
+        train_dataset.reload()  # sample per modality
+
         epoch_start_time = time()
         train_epoch_loss = 0
         valid_epoch_loss = 0
@@ -300,11 +295,11 @@ def main():
 
 if __name__ == "__main__":
     work_dir = "./workdir"
-    data_root = "./data"
+    data_root = "D:\\Datas\\competition\\cvpr2024\\train"
     medsam_lite_checkpoint = "lite_medsam.pth"
     num_epochs = 10
-    batch_size = 4
-    num_workers = 4
+    batch_size = 8
+    num_workers = 8
     device = "cuda:0"
     bbox_shift = 5
     lr = 5e-5
