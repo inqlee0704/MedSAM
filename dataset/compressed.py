@@ -36,19 +36,41 @@ def rle_decode_multivalue(runs, shape):
         img[start - 1 : start + length - 1] = value
     return img.reshape(shape)
 
-modality_list = ['CT', 'Dermoscopy', 'Endoscopy', 'Fundus', 'Mammo', 'Microscopy', 'MR', 'OCT', 'PET', 'US', 'XRay']
+
+modality_list = [
+    "CT",
+    "Dermoscopy",
+    "Endoscopy",
+    "Fundus",
+    "Mammo",
+    "Microscopy",
+    "MR",
+    "OCT",
+    "PET",
+    "US",
+    "XRay",
+]
+
 
 class EncodedDataset(Dataset):
-    def __init__(self, data_root, image_size=256, bbox_shift=5, data_aug=True, mode='train', sample=1000):
+    def __init__(
+        self,
+        data_root,
+        image_size=256,
+        bbox_shift=5,
+        data_aug=True,
+        mode="train",
+        sample=1000,
+    ):
         data_root = Path(data_root)
         self.data_root = data_root
-        self.gt_path = data_root/"gts"
-        self.img_path = data_root/"imgs"
+        self.gt_path = data_root / "gts"
+        self.img_path = data_root / "imgs"
         self.gt_path_files = self.gt_path.glob("*.*")
-        if mode == 'train':
-            self.data_list = pd.read_csv(data_root/"train_list.csv")
+        if mode == "train":
+            self.data_list = pd.read_csv(data_root / "train_list.csv")
         else:
-            self.data_list = pd.read_csv(data_root/"valid_list.csv")
+            self.data_list = pd.read_csv(data_root / "valid_list.csv")
         self.mode = mode
         self.sample = sample
 
@@ -57,15 +79,28 @@ class EncodedDataset(Dataset):
         self.bbox_shift = bbox_shift
         self.data_aug = data_aug
         # self.all_load={modality: False for modality in modality_list}
-        self.data_list={modality: list(filter(lambda x: x.find(modality) == 0, self.data_list['filename'].values)) for modality in modality_list}
-        self.total_data_indices = {modality: np.arange(len(item)) for modality, item in self.data_list.items()}
+        self.data_list = {
+            modality: list(
+                filter(
+                    lambda x: x.find(modality) == 0, self.data_list["filename"].values
+                )
+            )
+            for modality in modality_list
+        }
+        self.total_data_indices = {
+            modality: np.arange(len(item)) for modality, item in self.data_list.items()
+        }
         # self.data_glob={modality: self.img_path.glob(f'{modality}_*') for modality in modality_list}
         self.reload()
 
-
     def reload(self):
-        self.sampled_indices = {modality: random.choices(item, k=self.sample) for modality, item in self.data_list.items()}
-    
+        self.sampled_indices = np.resize(
+            [
+                random.choices(item, k=self.sample)
+                for item in self.total_data_indices.values()
+            ],
+            (-1),
+        )
 
     def __len__(self):
         return len(modality_list) * self.sample
@@ -75,41 +110,40 @@ class EncodedDataset(Dataset):
 
         modality_data_list = self.data_list[modality]
         # self.all_load[modality]=True
-        idx = int(idx/len(modality_list)) % len(modality_data_list)
+        idx = int(idx / len(modality_list)) % len(modality_data_list)
         img_path = modality_data_list[idx]
         if idx == 0:
             random.shuffle(modality_data_list)
 
-        filename = img_path.split('.')[0]
+        filename = img_path.split(".")[0]
         img, gt = self._load_img(filename)
-
 
         return img, gt, filename
 
     def _get_modality(self, idx):
-        modality_idx = idx%len(modality_list)
+        modality_idx = idx % len(modality_list)
         if modality_idx == 0:
             random.shuffle(modality_list)
-            
+
         modality = modality_list[modality_idx]
         return modality
 
     def _load_img(self, filename):
         # img_path = next(self.img_path.glob(f'{img_path}*'))
-        img_path = (self.img_path/f'{filename}.png').as_posix()
+        img_path = (self.img_path / f"{filename}.png").as_posix()
         img = cv2.imread(img_path)
         # gt_path = next(self.gt_path.glob(f'{img_path.stem}*'))
         gt = self._load_gt(filename)
-        return img,gt
+        return img, gt
 
     def _load_gt(self, filename):
-        gt_path = Path(self.gt_path / f'{filename}.pkl')
+        gt_path = Path(self.gt_path / f"{filename}.pkl")
         if gt_path.exists():
             with open(gt_path, "rb") as f:
                 rle_encode = pickle.load(f)
             gt = rle_decode_multivalue(rle_encode, [self.image_size, self.image_size])
         else:
-            gt_path = Path(self.gt_path / f'{filename}.npy')
+            gt_path = Path(self.gt_path / f"{filename}.npy")
             gt = np.load(gt_path, "r", allow_pickle=True)
         return gt
 

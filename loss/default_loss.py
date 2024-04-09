@@ -3,12 +3,15 @@ import monai
 from evaluation.iou import cal_iou
 import torch
 
+
 class DefaultLoss:
     def __init__(self, seg_loss_weight, ce_loss_weight, iou_loss_weight):
         self.seg_los_weight = seg_loss_weight
         self.ce_loss_weight = ce_loss_weight
         self.iou_loss_weight = iou_loss_weight
-        self.seg_loss = monai.losses.DiceLoss(sigmoid=True, squared_pred=True, reduction="mean")
+        self.seg_loss = monai.losses.DiceLoss(
+            sigmoid=True, squared_pred=True, reduction="mean"
+        )
         self.ce_loss = nn.BCEWithLogitsLoss(reduction="mean")
         self.iou_loss = nn.MSELoss(reduction="mean")
 
@@ -22,4 +25,3 @@ class DefaultLoss:
         # loss = mask_loss + l_iou
         loss = mask_loss + self.iou_loss_weight * l_iou
         return loss
-

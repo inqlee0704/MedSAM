@@ -88,8 +88,6 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     valid_dataset = EncodedDataset(data_root, data_aug=False, mode="valid")
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
 
-
-
     train_loss_list = []
     valid_loss_list = []
 
