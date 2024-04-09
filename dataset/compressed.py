@@ -94,7 +94,7 @@ class EncodedDataset(Dataset):
         self.reload()
 
     def reload(self):
-        self.sampled_indices = np.resize(
+        self.sampled_indices = np.reshape(
             [
                 random.choices(item, k=self.sample)
                 for item in self.total_data_indices.values()
