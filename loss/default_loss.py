@@ -6,7 +6,7 @@ import torch
 
 class DefaultLoss:
     def __init__(self, seg_loss_weight, ce_loss_weight, iou_loss_weight):
-        self.seg_los_weight = seg_loss_weight
+        self.seg_loss_weight = seg_loss_weight
         self.ce_loss_weight = ce_loss_weight
         self.iou_loss_weight = iou_loss_weight
         self.seg_loss = monai.losses.DiceLoss(

@@ -31,9 +31,11 @@ def rle_encode_multivalue(mask):
 
 def rle_decode_multivalue(runs, shape):
 
-    img = np.zeros(shape[0] * shape[1], dtype=np.uint8)
+    img = np.zeros(shape[0] * shape[1], dtype=np.uint16)
     for start, length, value in runs:
         img[start - 1 : start + length - 1] = value
+    if np.max(img) < 255:
+        img = img.astype(np.uint8)
     return img.reshape(shape)
 
 
@@ -166,7 +168,7 @@ class EncodedDataset(Dataset):
             gt,
             (img_resize.shape[1], img_resize.shape[0]),
             interpolation=cv2.INTER_NEAREST,
-        ).astype(np.uint8)
+        )
         gt = self.pad_image(gt)  # (256, 256)
         label_ids = np.unique(gt)[1:]
         try:
