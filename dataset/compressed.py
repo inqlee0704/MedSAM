@@ -1,4 +1,5 @@
 # %%
+import copy
 import random
 import pandas as pd
 from pathlib import Path
@@ -39,7 +40,7 @@ def rle_decode_multivalue(runs, shape):
     return img.reshape(shape)
 
 
-modality_list = [
+_modality_list = [
     "CT",
     "Dermoscopy",
     "Endoscopy",
@@ -75,60 +76,46 @@ class EncodedDataset(Dataset):
             self.data_list = pd.read_csv(data_root / "valid_list.csv")
         self.mode = mode
         self.sample = sample
+        self.modality_list = copy.deepcopy(_modality_list)
 
         self.image_size = image_size
         self.target_length = image_size
         self.bbox_shift = bbox_shift
         self.data_aug = data_aug
         # self.all_load={modality: False for modality in modality_list}
-        self.data_list = {
+        self.modality_data_list = {
             modality: list(
                 filter(
                     lambda x: x.find(modality) == 0, self.data_list["filename"].values
                 )
             )
-            for modality in modality_list
-        }
-        self.total_data_indices = {
-            modality: np.arange(len(item)) for modality, item in self.data_list.items()
+            for modality in self.modality_list
         }
         # self.data_glob={modality: self.img_path.glob(f'{modality}_*') for modality in modality_list}
-        self.reload()
+
+        # self.reload()
+        self.sampled_data = np.concatenate(
+            [item for item in self.modality_data_list.values()]
+        )
 
     def reload(self):
-        self.sampled_indices = np.reshape(
+        self.sampled_data = np.concatenate(
             [
                 random.choices(item, k=self.sample)
-                for item in self.total_data_indices.values()
-            ],
-            (-1),
+                for item in self.modality_data_list.values()
+            ]
         )
 
     def __len__(self):
-        return len(modality_list) * self.sample
+        # return len(self.modality_list) * self.sample
+        return len(self.sampled_data)
 
     def _load_data(self, idx):
-        modality = self._get_modality(idx)
-
-        modality_data_list = self.data_list[modality]
-        # self.all_load[modality]=True
-        idx = int(idx / len(modality_list)) % len(modality_data_list)
-        img_path = modality_data_list[idx]
-        if idx == 0:
-            random.shuffle(modality_data_list)
-
+        img_path = self.sampled_data[idx]
         filename = img_path.split(".")[0]
         img, gt = self._load_img(filename)
 
         return img, gt, filename
-
-    def _get_modality(self, idx):
-        modality_idx = idx % len(modality_list)
-        if modality_idx == 0:
-            random.shuffle(modality_list)
-
-        modality = modality_list[modality_idx]
-        return modality
 
     def _load_img(self, filename):
         # img_path = next(self.img_path.glob(f'{img_path}*'))

@@ -106,12 +106,13 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
             image, gt2D, boxes = image.to(device), gt2D.to(device), boxes.to(device)
             logits_pred, iou_pred = medsam_lite_model(image, boxes)
             loss = loss_fn(gt2D, logits_pred, iou_pred)
-            train_epoch_loss = loss.item()
+            train_epoch_loss += loss.item()
             loss.backward()
             optimizer.step()
             pbar.set_description(
                 f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
             )
+            # break
         epoch_end_time = time()
         train_epoch_loss = train_epoch_loss / len(train_loader)
 
@@ -119,27 +120,40 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         lr_scheduler.step(train_epoch_loss)
 
         # valid
+        valid_partial_iou = {f"{m}/iou": 0 for m in valid_dataset.modality_list}
+        valid_partial_count = {m: 0 for m in valid_dataset.modality_list}
         with torch.no_grad():
+
             pbar = tqdm(valid_loader)
+            # valid_dataset.total_data_indices
             for step, batch in enumerate(pbar):
                 image = batch["image"]
                 gt2D = batch["gt2D"]
                 boxes = batch["bboxes"]
+                filenames = batch["image_name"]
                 image, gt2D, boxes = image.to(device), gt2D.to(device), boxes.to(device)
                 logits_pred, iou_pred = medsam_lite_model(image, boxes)
+                ious = cal_iou(torch.sigmoid(logits_pred) > 0.5, gt2D.bool())
+                for fn, iou in zip(filenames, ious):
+                    m = fn.split("_")[0]
+                    valid_partial_iou[f"{m}/iou"] += iou
+                    valid_partial_count[m] += 1
+                # cal_iou()
                 loss = loss_fn(gt2D, logits_pred, iou_pred)
                 valid_epoch_loss += loss.item()
                 pbar.set_description(
                     f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
                 )
         valid_epoch_loss = valid_epoch_loss / len(valid_loader)
+        for m, c in valid_partial_count.items():
+            valid_partial_iou[f"{m}/iou"] /= c
+        metrics = {
+            "train/loss": train_epoch_loss,
+            "valid/loss": valid_epoch_loss,
+        }
+        metrics.update(valid_partial_iou)
 
-        wandb.log(
-            {
-                "train/loss": train_epoch_loss,
-                "valid/loss": valid_epoch_loss,
-            }
-        )
+        wandb.log(metrics)
 
         best_loss = model_checkpoint(
             medsam_lite_model, work_dir, optimizer, best_loss, epoch, valid_epoch_loss
@@ -151,7 +165,7 @@ if __name__ == "__main__":
     work_dir = "./workdir"
     data_root = "D:\\Datas\\competition\\cvpr2024\\train"
     medsam_lite_checkpoint = "lite_medsam.pth"
-    num_epochs = 10
+    num_epochs = 1000
     batch_size = 8
     num_workers = 8
     device = "cuda:0"
