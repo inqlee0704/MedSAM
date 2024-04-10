@@ -24,10 +24,10 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm, trange
 from models.medsam_lite import MedSAM_Lite
 
-from dataset.npydataset import NpyDataset
+from dataset.npy_dataset import NpyDataset
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
-from dataset.compressed import EncodedDataset
+from dataset.encoded_dataset import EncodedDataset
 
 torch.cuda.empty_cache()
 os.environ["OMP_NUM_THREADS"] = "4"  # export OMP_NUM_THREADS=4
