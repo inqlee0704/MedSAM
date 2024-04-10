@@ -59,7 +59,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     medsam_lite_model.train()
     print(f"MedSAM Lite size: {sum(p.numel() for p in medsam_lite_model.parameters())}")
 
-    checkpoint = "workdir/temp.pth"
+    checkpoint = "workdir/lite_medsam.pth"
     if checkpoint and isfile(checkpoint):
         print(f"Resuming from checkpoint {checkpoint}")
         checkpoint = torch.load(checkpoint)
@@ -98,6 +98,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         train_epoch_loss = 0
         valid_epoch_loss = 0
         pbar = tqdm(train_loader)
+        medsam_lite_model.train()
         for step, batch in enumerate(pbar):
             image = batch["image"]
             gt2D = batch["gt2D"]
@@ -122,6 +123,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         # valid
         valid_partial_iou = {f"{m}/iou": 0 for m in valid_dataset.modality_list}
         valid_partial_count = {m: 0 for m in valid_dataset.modality_list}
+        medsam_lite_model.eval()
         with torch.no_grad():
 
             pbar = tqdm(valid_loader)
