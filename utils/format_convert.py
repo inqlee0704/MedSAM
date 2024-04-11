@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import os
+
 join = os.path.join
 import random
 import numpy as np
@@ -17,12 +18,14 @@ def dcm2nii(dcm_path, nii_path):
     image = reader.Execute()
     sitk.WriteImage(image, nii_path)
 
+
 def mhd2nii(mhd_path, nii_path):
     """
     Convert mhd files to nii files
     """
     image = sitk.ReadImage(mhd_path)
     sitk.WriteImage(image, nii_path)
+
 
 def nii2nii(nii_path, nii_gz_path):
     """
@@ -31,6 +34,7 @@ def nii2nii(nii_path, nii_gz_path):
     image = sitk.ReadImage(nii_path)
     sitk.WriteImage(image, nii_gz_path)
 
+
 def nrrd2nii(nrrd_path, nii_path):
     """
     Convert nrrd files to nii files
@@ -38,12 +42,14 @@ def nrrd2nii(nrrd_path, nii_path):
     image = sitk.ReadImage(nrrd_path)
     sitk.WriteImage(image, nii_path)
 
+
 def jpg2png(jpg_path, png_path):
     """
     Convert jpg files to png files
     """
     image = io.imread(jpg_path)
     io.imsave(png_path, image)
+
 
 def patchfy(img, mask, outpath, basename):
     """
@@ -61,13 +67,27 @@ def patchfy(img, mask, outpath, basename):
     mask_height, mask_width = mask.shape
 
     if img_height % patch_height != 0:
-        img = np.pad(img, ((0, patch_height - img_height % patch_height), (0, 0), (0, 0)), mode="constant")
+        img = np.pad(
+            img,
+            ((0, patch_height - img_height % patch_height), (0, 0), (0, 0)),
+            mode="constant",
+        )
     if img_width % patch_width != 0:
-        img = np.pad(img, ((0, 0), (0, patch_width - img_width % patch_width), (0, 0)), mode="constant")
+        img = np.pad(
+            img,
+            ((0, 0), (0, patch_width - img_width % patch_width), (0, 0)),
+            mode="constant",
+        )
     if mask_height % patch_height != 0:
-        mask = np.pad(mask, ((0, patch_height - mask_height % patch_height), (0, 0)), mode="constant")
+        mask = np.pad(
+            mask,
+            ((0, patch_height - mask_height % patch_height), (0, 0)),
+            mode="constant",
+        )
     if mask_width % patch_width != 0:
-        mask = np.pad(mask, ((0, 0), (0, patch_width - mask_width % patch_width)), mode="constant")
+        mask = np.pad(
+            mask, ((0, 0), (0, patch_width - mask_width % patch_width)), mode="constant"
+        )
 
     assert img.shape[:2] == mask.shape
     assert img.shape[0] % patch_height == 0
@@ -75,20 +95,37 @@ def patchfy(img, mask, outpath, basename):
     assert mask.shape[0] % patch_height == 0
     assert mask.shape[1] % patch_width == 0
 
-    height_steps = (img_height // patch_height) if img_height % patch_height == 0 else (img_height // patch_height + 1)
-    width_steps = (img_width // patch_width) if img_width % patch_width == 0 else (img_width // patch_width + 1)
+    height_steps = (
+        (img_height // patch_height)
+        if img_height % patch_height == 0
+        else (img_height // patch_height + 1)
+    )
+    width_steps = (
+        (img_width // patch_width)
+        if img_width % patch_width == 0
+        else (img_width // patch_width + 1)
+    )
 
     for i in range(height_steps):
         for j in range(width_steps):
-            img_patch = img[i * patch_height:(i + 1) * patch_height, j * patch_width:(j + 1) * patch_width, :]
-            mask_patch = mask[i * patch_height:(i + 1) * patch_height, j * patch_width:(j + 1) * patch_width]
+            img_patch = img[
+                i * patch_height : (i + 1) * patch_height,
+                j * patch_width : (j + 1) * patch_width,
+                :,
+            ]
+            mask_patch = mask[
+                i * patch_height : (i + 1) * patch_height,
+                j * patch_width : (j + 1) * patch_width,
+            ]
             assert img_patch.shape[:2] == mask_patch.shape
             assert img_patch.shape[0] == patch_height
             assert img_patch.shape[1] == patch_width
-            print(f"img_patch.shape: {img_patch.shape}, mask_patch.shape: {mask_patch.shape}")
+            print(
+                f"img_patch.shape: {img_patch.shape}, mask_patch.shape: {mask_patch.shape}"
+            )
             img_patch_path = join(image_patch_dir, f"{basename}_{i}_{j}.png")
             mask_patch_path = join(mask_patch_dir, f"{basename}_{i}_{j}.png")
-            io.imsave(img_patch_path, img_patch)    
+            io.imsave(img_patch_path, img_patch)
             io.imsave(mask_patch_path, mask_patch)
 
 

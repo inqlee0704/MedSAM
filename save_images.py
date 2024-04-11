@@ -23,6 +23,7 @@ import pandas as pd
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
 
+
 def show_mask(mask, ax, random_color=False):
     if random_color:
         color = np.concatenate([np.random.random(3), np.array([0.45])], axis=0)
@@ -67,17 +68,19 @@ class NpyDataset(Dataset):
         self.train_csv = pd.read_csv(join(data_root, "train_list.csv"))
         self.valid_csv = pd.read_csv(join(data_root, "valid_list.csv"))
         if mode == "train":
-            self.gt_path_files = self.train_csv['gt_path'].values
+            self.gt_path_files = self.train_csv["gt_path"].values
         elif mode == "valid":
-            self.gt_path_files = self.valid_csv['gt_path'].values
-        else: # use all data
-            self.gt_path_files = sorted(glob(join(self.gt_path, "*.npy"), recursive=True))
+            self.gt_path_files = self.valid_csv["gt_path"].values
+        else:  # use all data
+            self.gt_path_files = sorted(
+                glob(join(self.gt_path, "*.npy"), recursive=True)
+            )
         self.gt_path_files = [
             file
             for file in self.gt_path_files
             if isfile(join(self.img_path, basename(file)))
         ]
-        self.gt_path_files = [x for x in self.gt_path_files if 'Microscopy' in x]
+        self.gt_path_files = [x for x in self.gt_path_files if "Microscopy" in x]
 
         self.image_size = image_size
         self.target_length = image_size
@@ -185,9 +188,10 @@ class NpyDataset(Dataset):
 
         return image_padded
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     work_dir = "./workdir"
-    img_save_dir = join(work_dir, 'images_micro')
+    img_save_dir = join(work_dir, "images_micro")
     os.makedirs(img_save_dir, exist_ok=True)
     data_root = "./data"
     medsam_lite_checkpoint = "lite_medsam.pth"
@@ -213,11 +217,10 @@ if __name__ == '__main__':
     os.environ["VECLIB_MAXIMUM_THREADS"] = "4"  # export VECLIB_MAXIMUM_THREADS=4
     os.environ["NUMEXPR_NUM_THREADS"] = "6"  # export NUMEXPR_NUM_THREADS=6
 
-    tr_dataset = NpyDataset(data_root, data_aug=False, mode='train')
+    tr_dataset = NpyDataset(data_root, data_aug=False, mode="train")
     tr_dataloader = DataLoader(tr_dataset, batch_size=4, shuffle=True)
     # val_dataset = NpyDataset(data_root, data_aug=False, mode='valid')
     # val_dataloader = DataLoader(val_dataset, batch_size=4, shuffle=False)
-
 
     # for step, batch in tqdm(enumerate(val_dataloader), total=len(val_dataloader)):
     for step, batch in tqdm(enumerate(tr_dataloader), total=len(tr_dataloader)):
@@ -230,44 +233,43 @@ if __name__ == '__main__':
         bboxes = batch["bboxes"]
         names_temp = batch["image_name"]
 
-        axs[0,0].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[0,0])
-        show_box(bboxes[idx].numpy().squeeze(), axs[0,0])
-        axs[0,0].axis("off")
+        axs[0, 0].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
+        show_mask(gt[idx].cpu().squeeze().numpy(), axs[0, 0])
+        show_box(bboxes[idx].numpy().squeeze(), axs[0, 0])
+        axs[0, 0].axis("off")
         # set title
-        axs[0,0].set_title(names_temp[idx])
+        axs[0, 0].set_title(names_temp[idx])
 
         idx = 1
         # idx = random.randint(10, 19)
-        axs[0,1].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[0,1])
-        show_box(bboxes[idx].numpy().squeeze(), axs[0,1])
-        axs[0,1].axis("off")
+        axs[0, 1].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
+        show_mask(gt[idx].cpu().squeeze().numpy(), axs[0, 1])
+        show_box(bboxes[idx].numpy().squeeze(), axs[0, 1])
+        axs[0, 1].axis("off")
         # set title
-        axs[0,1].set_title(names_temp[idx])
+        axs[0, 1].set_title(names_temp[idx])
 
         idx = 2
         # idx = random.randint(20, 29)
-        axs[1,0].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[1,0])
-        show_box(bboxes[idx].numpy().squeeze(), axs[1,0])
-        axs[1,0].axis("off")
+        axs[1, 0].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
+        show_mask(gt[idx].cpu().squeeze().numpy(), axs[1, 0])
+        show_box(bboxes[idx].numpy().squeeze(), axs[1, 0])
+        axs[1, 0].axis("off")
         # set title
-        axs[1,0].set_title(names_temp[idx])
+        axs[1, 0].set_title(names_temp[idx])
 
         idx = 3
         # idx = random.randint(30, 39)
-        axs[1,1].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[1,1])
-        show_box(bboxes[idx].numpy().squeeze(), axs[1,1])
-        axs[1,1].axis("off")
+        axs[1, 1].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
+        show_mask(gt[idx].cpu().squeeze().numpy(), axs[1, 1])
+        show_box(bboxes[idx].numpy().squeeze(), axs[1, 1])
+        axs[1, 1].axis("off")
         # set title
-        axs[1,1].set_title(names_temp[idx])
-
+        axs[1, 1].set_title(names_temp[idx])
 
         plt.subplots_adjust(wspace=0.01, hspace=0)
         plt.savefig(
-            join(img_save_dir, names_temp[0].replace('.npy', '.png')),
+            join(img_save_dir, names_temp[0].replace(".npy", ".png")),
             bbox_inches="tight",
             dpi=300,
         )

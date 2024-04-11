@@ -92,9 +92,6 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     valid_dataset = EncodedDataset(data_root, data_aug=False, mode="valid")
     valid_loader = DataLoader(valid_dataset, batch_size=batch_size * 2, shuffle=False)
 
-    train_loss_list = []
-    valid_loss_list = []
-
     for epoch in tqdm(range(start_epoch + 1, num_epochs)):
         train_dataset.reload()  # sample per modality
 
@@ -117,11 +114,9 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
             pbar.set_description(
                 f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
             )
-            # break
         epoch_end_time = time()
         train_epoch_loss = train_epoch_loss / len(train_loader)
 
-        train_loss_list.append(train_epoch_loss)
         lr_scheduler.step(train_epoch_loss)
 
         # valid
@@ -163,7 +158,6 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
                     valid_partial[f"{m}/dcs"] += dcs
                     valid_partial_count[m] += 1
 
-                # cal_iou()
                 loss = loss_fn(gt2D, logits_pred, iou_pred)
                 valid_epoch_loss += loss.item()
                 pbar.set_description(
