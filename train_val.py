@@ -204,7 +204,7 @@ if __name__ == "__main__":
     data_root = "D:\\Datas\\competition\\cvpr2024\\train"
     medsam_lite_checkpoint = "lite_medsam.pth"
     num_epochs = 1000
-    batch_size = 2
+    batch_size = 8
     num_workers = 2
     device = "cpu"
     bbox_shift = 5
