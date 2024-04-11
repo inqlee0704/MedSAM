@@ -58,8 +58,15 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     medsam_lite_model = medsam_lite_model.to(device)
     medsam_lite_model.train()
     print(f"MedSAM Lite size: {sum(p.numel() for p in medsam_lite_model.parameters())}")
-
-    checkpoint = "workdir/lite_medsam.pth"
+    # * Optimizer
+    optimizer = optim.AdamW(
+        medsam_lite_model.parameters(),
+        lr=lr,
+        betas=(0.9, 0.999),
+        eps=1e-08,
+        weight_decay=weight_decay,
+    )
+    checkpoint = "workdir/medsam_lite_latest.pth"
     if checkpoint and isfile(checkpoint):
         print(f"Resuming from checkpoint {checkpoint}")
         checkpoint = torch.load(checkpoint)
@@ -69,14 +76,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         best_loss = checkpoint["loss"]
         print(f"Loaded checkpoint from epoch {start_epoch}")
 
-    # * Optimizer
-    optimizer = optim.AdamW(
-        medsam_lite_model.parameters(),
-        lr=lr,
-        betas=(0.9, 0.999),
-        eps=1e-08,
-        weight_decay=weight_decay,
-    )
+
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.9, patience=5, cooldown=0
     )
@@ -91,15 +91,15 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     train_loss_list = []
     valid_loss_list = []
 
-    for epoch in range(start_epoch + 1, num_epochs):
+    for epoch in tqdm(range(start_epoch + 1, num_epochs)):
         train_dataset.reload()  # sample per modality
 
         epoch_start_time = time()
         train_epoch_loss = 0
         valid_epoch_loss = 0
-        pbar = tqdm(train_loader)
+        # pbar = tqdm(train_loader)
         medsam_lite_model.train()
-        for step, batch in enumerate(pbar):
+        for step, batch in enumerate(train_loader):
             image = batch["image"]
             gt2D = batch["gt2D"]
             boxes = batch["bboxes"]
@@ -110,9 +110,9 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
             train_epoch_loss += loss.item()
             loss.backward()
             optimizer.step()
-            pbar.set_description(
-                f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
-            )
+            # pbar.set_description(
+            #     f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
+            # )
             # break
         epoch_end_time = time()
         train_epoch_loss = train_epoch_loss / len(train_loader)
@@ -126,9 +126,9 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         medsam_lite_model.eval()
         with torch.no_grad():
 
-            pbar = tqdm(valid_loader)
+            # pbar = tqdm(valid_loader)
             # valid_dataset.total_data_indices
-            for step, batch in enumerate(pbar):
+            for step, batch in enumerate(valid_loader):
                 image = batch["image"]
                 gt2D = batch["gt2D"]
                 boxes = batch["bboxes"]
@@ -143,15 +143,19 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
                 # cal_iou()
                 loss = loss_fn(gt2D, logits_pred, iou_pred)
                 valid_epoch_loss += loss.item()
-                pbar.set_description(
-                    f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
-                )
+                # pbar.set_description(
+                #     f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
+                # )
         valid_epoch_loss = valid_epoch_loss / len(valid_loader)
+        mean_iou = 0
         for m, c in valid_partial_count.items():
             valid_partial_iou[f"{m}/iou"] /= c
+            mean_iou += valid_partial_iou[f"{m}/iou"]
+        mean_iou /= len(valid_partial_iou)
         metrics = {
             "train/loss": train_epoch_loss,
             "valid/loss": valid_epoch_loss,
+            'mean/iou':mean_iou,
         }
         metrics.update(valid_partial_iou)
 
