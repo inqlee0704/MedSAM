@@ -101,9 +101,9 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         epoch_start_time = time()
         train_epoch_loss = 0
         valid_epoch_loss = 0
-        # pbar = tqdm(train_loader)
+        pbar = tqdm(train_loader)
         medsam_lite_model.train()
-        for step, batch in enumerate(train_loader):
+        for step, batch in enumerate(pbar):
             image = batch["image"]
             gt2D = batch["gt2D"]
             boxes = batch["bboxes"]
@@ -114,9 +114,9 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
             train_epoch_loss += loss.item()
             loss.backward()
             optimizer.step()
-            # pbar.set_description(
-            #     f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
-            # )
+            pbar.set_description(
+                f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
+            )
             # break
         epoch_end_time = time()
         train_epoch_loss = train_epoch_loss / len(train_loader)
@@ -125,14 +125,20 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         lr_scheduler.step(train_epoch_loss)
 
         # valid
+        valid_partial = {}
+        for m in valid_dataset.modality_list:
+            valid_partial[f'{m}/iou']=0
+            valid_partial[f'{m}/dsc']=0
+            valid_partial[f'{m}/nsd']=0
+
         valid_partial = {f"{m}/iou": 0 for m in valid_dataset.modality_list}
         valid_partial_count = {m: 0 for m in valid_dataset.modality_list}
         medsam_lite_model.eval()
         with torch.no_grad():
 
-            # pbar = tqdm(valid_loader)
+            pbar = tqdm(valid_loader)
             # valid_dataset.total_data_indices
-            for step, batch in enumerate(valid_loader):
+            for step, batch in enumerate(pbar):
                 image = batch["image"]
                 gt2D = batch["gt2D"]
                 boxes = batch["bboxes"]
@@ -160,9 +166,9 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
                 # cal_iou()
                 loss = loss_fn(gt2D, logits_pred, iou_pred)
                 valid_epoch_loss += loss.item()
-                # pbar.set_description(
-                #     f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
-                # )
+                pbar.set_description(
+                    f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
+                )
         valid_epoch_loss = valid_epoch_loss / len(valid_loader)
         mean_iou = 0
         for m, c in valid_partial_count.items():
