@@ -9,6 +9,11 @@ from os.path import basename, exists, isdir, isfile, join
 from time import time
 from evaluation.iou import cal_iou
 from callback.checkpoint import model_checkpoint
+from evaluation.SurfaceDice import (
+    compute_dice_coefficient,
+    compute_surface_dice_at_tolerance,
+    compute_surface_distances,
+)
 from loss.default_loss import DefaultLoss
 
 import cv2
@@ -76,7 +81,6 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         best_loss = checkpoint["loss"]
         print(f"Loaded checkpoint from epoch {start_epoch}")
 
-
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.9, patience=5, cooldown=0
     )
@@ -86,7 +90,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     valid_dataset = EncodedDataset(data_root, data_aug=False, mode="valid")
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size, shuffle=False)
+    valid_loader = DataLoader(valid_dataset, batch_size=batch_size * 2, shuffle=False)
 
     train_loss_list = []
     valid_loss_list = []
@@ -121,7 +125,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         lr_scheduler.step(train_epoch_loss)
 
         # valid
-        valid_partial_iou = {f"{m}/iou": 0 for m in valid_dataset.modality_list}
+        valid_partial = {f"{m}/iou": 0 for m in valid_dataset.modality_list}
         valid_partial_count = {m: 0 for m in valid_dataset.modality_list}
         medsam_lite_model.eval()
         with torch.no_grad():
@@ -135,11 +139,24 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
                 filenames = batch["image_name"]
                 image, gt2D, boxes = image.to(device), gt2D.to(device), boxes.to(device)
                 logits_pred, iou_pred = medsam_lite_model(image, boxes)
-                ious = cal_iou(torch.sigmoid(logits_pred) > 0.5, gt2D.bool())
-                for fn, iou in zip(filenames, ious):
+                pred_mask = torch.sigmoid(logits_pred) > 0.5
+                gt_mask = gt2D.bool()
+                ious = cal_iou(pred_mask, gt_mask)
+                dcs = compute_dice_coefficient(gt_mask, pred_mask)
+                spacing = [1.0, 1.0, 1.0]
+                surface_distances = compute_surface_distances(
+                    gt_mask, pred_mask, spacing
+                )
+                tolerance_mm = 2
+                nsd = compute_surface_dice_at_tolerance(surface_distances, tolerance_mm)
+
+                for fn, iou in zip(filenames, ious, dcs, nsd):
                     m = fn.split("_")[0]
-                    valid_partial_iou[f"{m}/iou"] += iou
+                    valid_partial[f"{m}/iou"] += iou
+                    valid_partial[f"{m}/nsd"] += nsd
+                    valid_partial[f"{m}/dcs"] += dcs
                     valid_partial_count[m] += 1
+
                 # cal_iou()
                 loss = loss_fn(gt2D, logits_pred, iou_pred)
                 valid_epoch_loss += loss.item()
@@ -149,15 +166,24 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         valid_epoch_loss = valid_epoch_loss / len(valid_loader)
         mean_iou = 0
         for m, c in valid_partial_count.items():
-            valid_partial_iou[f"{m}/iou"] /= c
-            mean_iou += valid_partial_iou[f"{m}/iou"]
-        mean_iou /= len(valid_partial_iou)
+            valid_partial[f"{m}/iou"] /= c
+            valid_partial[f"{m}/dcs"] /= c
+            valid_partial[f"{m}/nsd"] /= c
+            mean_iou += valid_partial[f"{m}/iou"]
+            mean_dcs += valid_partial[f"{m}/dcs"]
+            mean_nsd += valid_partial[f"{m}/nsd"]
+
+        mean_iou /= len(valid_partial)
+        mean_dsc /= len(valid_partial)
+        mean_nsd /= len(valid_partial)
         metrics = {
             "train/loss": train_epoch_loss,
             "valid/loss": valid_epoch_loss,
-            'mean/iou':mean_iou,
+            "mean/iou": mean_iou,
+            "mean/nsd": mean_nsd,
+            "mean/dsc": mean_dsc,
         }
-        metrics.update(valid_partial_iou)
+        metrics.update(valid_partial)
 
         wandb.log(metrics)
 
@@ -172,9 +198,9 @@ if __name__ == "__main__":
     data_root = "D:\\Datas\\competition\\cvpr2024\\train"
     medsam_lite_checkpoint = "lite_medsam.pth"
     num_epochs = 1000
-    batch_size = 8
-    num_workers = 8
-    device = "cuda:0"
+    batch_size = 2
+    num_workers = 2
+    device = "cpu"
     bbox_shift = 5
     lr = 5e-5
     weight_decay = 0.01
