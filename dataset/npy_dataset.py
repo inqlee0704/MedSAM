@@ -1,65 +1,23 @@
-import argparse
-import os
 import random
-from copy import deepcopy
-from datetime import datetime
 from glob import glob
-from os import listdir, makedirs
-from os.path import basename, exists, isdir, isfile, join
-from time import time
+from os.path import basename, isfile, join
 
 import cv2
-import monai
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from matplotlib import pyplot as plt
-from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm, trange
 import pandas as pd
-
-from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
-from tiny_vit_sam import TinyViT
-
-
-def show_mask(mask, ax, random_color=False):
-    if random_color:
-        color = np.concatenate([np.random.random(3), np.array([0.45])], axis=0)
-    else:
-        color = np.array([251 / 255, 252 / 255, 30 / 255, 0.45])
-    h, w = mask.shape[-2:]
-    mask_image = mask.reshape(h, w, 1) * color.reshape(1, 1, -1)
-    ax.imshow(mask_image)
+import torch
+from torch.utils.data import Dataset
 
 
-def show_box(box, ax):
-    x0, y0 = box[0], box[1]
-    w, h = box[2] - box[0], box[3] - box[1]
-    ax.add_patch(
-        plt.Rectangle((x0, y0), w, h, edgecolor="blue", facecolor=(0, 0, 0, 0), lw=2)
-    )
-
-
-def cal_iou(result, reference):
-
-    intersection = torch.count_nonzero(
-        torch.logical_and(result, reference), dim=[i for i in range(1, result.ndim)]
-    )
-    union = torch.count_nonzero(
-        torch.logical_or(result, reference), dim=[i for i in range(1, result.ndim)]
-    )
-
-    iou = intersection.float() / union.float()
-
-    return iou.unsqueeze(1)
-
-
-# %%
 class NpyDataset(Dataset):
     def __init__(
-        self, data_root, image_size=256, bbox_shift=5, data_aug=True, mode="train"
+        self,
+        data_root,
+        image_size=256,
+        bbox_shift=5,
+        data_aug=True,
+        mode="train",
+        debug=False,
     ):
         self.mode = mode
         self.data_root = data_root
@@ -80,12 +38,22 @@ class NpyDataset(Dataset):
             for file in self.gt_path_files
             if isfile(join(self.img_path, basename(file)))
         ]
-        self.gt_path_files = [x for x in self.gt_path_files if "Microscopy" in x]
+        if debug:
+            self.gt_path_files = self.gt_path_files[:1000]
 
         self.image_size = image_size
         self.target_length = image_size
         self.bbox_shift = bbox_shift
         self.data_aug = data_aug
+
+        self.modality_list = np.unique(
+            [x.split("/")[-1].split("_")[0] for x in self.gt_path_files]
+        )
+        self.gt_path_modality_list = []
+        for modality in self.modality_list:
+            modality = modality + "_"
+            modality_file_list = [x for x in self.gt_path_files if modality in x]
+            self.gt_path_modality_list.append(modality_file_list)
 
     def __len__(self):
         return len(self.gt_path_files)
@@ -116,7 +84,7 @@ class NpyDataset(Dataset):
             gt,
             (img_resize.shape[1], img_resize.shape[0]),
             interpolation=cv2.INTER_NEAREST,
-        ).astype(np.uint8)
+        )
         gt = self.pad_image(gt)  # (256, 256)
         label_ids = np.unique(gt)[1:]
         try:
@@ -188,89 +156,10 @@ class NpyDataset(Dataset):
 
         return image_padded
 
-
-if __name__ == "__main__":
-    work_dir = "./workdir"
-    img_save_dir = join(work_dir, "images_micro")
-    os.makedirs(img_save_dir, exist_ok=True)
-    data_root = "./data"
-    medsam_lite_checkpoint = "lite_medsam.pth"
-    num_epochs = 10
-    batch_size = 4
-    num_workers = 4
-    device = "cuda:0"
-    bbox_shift = 5
-    lr = 5e-5
-    weight_decay = 0.01
-    iou_loss_weight = 1.0
-    seg_loss_weight = 1.0
-    ce_loss_weight = 1.0
-    do_sancheck = True
-    checkpoint = "workdir/medsam_lite_latest.pth"
-    makedirs(work_dir, exist_ok=True)
-    makedirs(img_save_dir, exist_ok=True)
-
-    torch.cuda.empty_cache()
-    os.environ["OMP_NUM_THREADS"] = "4"  # export OMP_NUM_THREADS=4
-    os.environ["OPENBLAS_NUM_THREADS"] = "4"  # export OPENBLAS_NUM_THREADS=4
-    os.environ["MKL_NUM_THREADS"] = "6"  # export MKL_NUM_THREADS=6
-    os.environ["VECLIB_MAXIMUM_THREADS"] = "4"  # export VECLIB_MAXIMUM_THREADS=4
-    os.environ["NUMEXPR_NUM_THREADS"] = "6"  # export NUMEXPR_NUM_THREADS=6
-
-    tr_dataset = NpyDataset(data_root, data_aug=False, mode="train")
-    tr_dataloader = DataLoader(tr_dataset, batch_size=4, shuffle=True)
-    # val_dataset = NpyDataset(data_root, data_aug=False, mode='valid')
-    # val_dataloader = DataLoader(val_dataset, batch_size=4, shuffle=False)
-
-    # for step, batch in tqdm(enumerate(val_dataloader), total=len(val_dataloader)):
-    for step, batch in tqdm(enumerate(tr_dataloader), total=len(tr_dataloader)):
-        _, axs = plt.subplots(2, 2, figsize=(10, 10))
-        idx = 0
-        # idx = random.randint(0, 9)
-
-        image = batch["image"]
-        gt = batch["gt2D"]
-        bboxes = batch["bboxes"]
-        names_temp = batch["image_name"]
-
-        axs[0, 0].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[0, 0])
-        show_box(bboxes[idx].numpy().squeeze(), axs[0, 0])
-        axs[0, 0].axis("off")
-        # set title
-        axs[0, 0].set_title(names_temp[idx])
-
-        idx = 1
-        # idx = random.randint(10, 19)
-        axs[0, 1].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[0, 1])
-        show_box(bboxes[idx].numpy().squeeze(), axs[0, 1])
-        axs[0, 1].axis("off")
-        # set title
-        axs[0, 1].set_title(names_temp[idx])
-
-        idx = 2
-        # idx = random.randint(20, 29)
-        axs[1, 0].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[1, 0])
-        show_box(bboxes[idx].numpy().squeeze(), axs[1, 0])
-        axs[1, 0].axis("off")
-        # set title
-        axs[1, 0].set_title(names_temp[idx])
-
-        idx = 3
-        # idx = random.randint(30, 39)
-        axs[1, 1].imshow(image[idx].cpu().permute(1, 2, 0).numpy())
-        show_mask(gt[idx].cpu().squeeze().numpy(), axs[1, 1])
-        show_box(bboxes[idx].numpy().squeeze(), axs[1, 1])
-        axs[1, 1].axis("off")
-        # set title
-        axs[1, 1].set_title(names_temp[idx])
-
-        plt.subplots_adjust(wspace=0.01, hspace=0)
-        plt.savefig(
-            join(img_save_dir, names_temp[0].replace(".npy", ".png")),
-            bbox_inches="tight",
-            dpi=300,
-        )
-        plt.close()
+    def reload(self, samples=50):
+        new_gt_path_list = []
+        min_sample = np.min([len(x) for x in self.gt_path_modality_list])
+        samples = min(min_sample, samples)
+        for gt_path_modality_file in self.gt_path_modality_list:
+            new_gt_path_list.extend(random.sample(gt_path_modality_file, samples))
+        self.gt_path_files = new_gt_path_list

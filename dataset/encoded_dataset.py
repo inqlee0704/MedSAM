@@ -1,15 +1,61 @@
+# %%
+import copy
 import random
-from glob import glob
-from os.path import basename, isfile, join
-
-import cv2
-import numpy as np
 import pandas as pd
+from pathlib import Path
+import random
+from os.path import join, isfile, basename
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+import cv2
+from pathlib import Path
+import pickle
 
-class NpyDataset(Dataset):
+import numpy as np
+
+
+def rle_encode_multivalue(mask):
+
+    pixels = mask.flatten()
+    pixels = np.concatenate([[0], pixels, [0]])
+    changes = np.diff(pixels) != 0  # 값이 변경되는 지점 찾기
+    indexes = np.where(changes)[0] + 1  # 변경 지점의 인덱스
+    runs = [
+        (indexes[i], indexes[i + 1] - indexes[i], pixels[indexes[i]])
+        for i in range(len(indexes) - 1)
+    ]
+
+    return runs
+
+
+def rle_decode_multivalue(runs, shape):
+
+    img = np.zeros(shape[0] * shape[1], dtype=np.uint16)
+    for start, length, value in runs:
+        img[start - 1 : start + length - 1] = value
+    if np.max(img) < 255:
+        img = img.astype(np.uint8)
+    return img.reshape(shape)
+
+
+_modality_list = [
+    "CT",
+    "Dermoscopy",
+    "Endoscopy",
+    "Fundus",
+    "Mammo",
+    "Microscopy",
+    "MR",
+    "OCT",
+    "PET",
+    "US",
+    "XRay",
+]
+
+
+class EncodedDataset(Dataset):
     def __init__(
         self,
         data_root,
@@ -17,55 +63,82 @@ class NpyDataset(Dataset):
         bbox_shift=5,
         data_aug=True,
         mode="train",
-        debug=False,
+        sample=1000,
     ):
-        self.mode = mode
+        data_root = Path(data_root)
         self.data_root = data_root
-        self.gt_path = join(data_root, "gts")
-        self.img_path = join(data_root, "imgs")
-        self.train_csv = pd.read_csv(join(data_root, "train_list.csv"))
-        self.valid_csv = pd.read_csv(join(data_root, "valid_list.csv"))
+        self.gt_path = data_root / "gts"
+        self.img_path = data_root / "imgs"
+        self.gt_path_files = self.gt_path.glob("*.*")
         if mode == "train":
-            self.gt_path_files = self.train_csv["gt_path"].values
-        elif mode == "valid":
-            self.gt_path_files = self.valid_csv["gt_path"].values
-        else:  # use all data
-            self.gt_path_files = sorted(
-                glob(join(self.gt_path, "*.npy"), recursive=True)
-            )
-        self.gt_path_files = [
-            file
-            for file in self.gt_path_files
-            if isfile(join(self.img_path, basename(file)))
-        ]
-        if debug:
-            self.gt_path_files = self.gt_path_files[:1000]
+            self.data_list = pd.read_csv(data_root / "train_list.csv")
+        else:
+            self.data_list = pd.read_csv(data_root / "valid_list.csv")
+        self.mode = mode
+        self.sample = sample
+        self.modality_list = copy.deepcopy(_modality_list)
 
         self.image_size = image_size
         self.target_length = image_size
         self.bbox_shift = bbox_shift
         self.data_aug = data_aug
+        # self.all_load={modality: False for modality in modality_list}
+        self.modality_data_list = {
+            modality: list(
+                filter(
+                    lambda x: x.find(modality) == 0, self.data_list["filename"].values
+                )
+            )
+            for modality in self.modality_list
+        }
+        # self.data_glob={modality: self.img_path.glob(f'{modality}_*') for modality in modality_list}
 
-        self.modality_list = np.unique(
-            [x.split("/")[-1].split("_")[0] for x in self.gt_path_files]
+        # self.reload()
+        self.sampled_data = np.concatenate(
+            [item for item in self.modality_data_list.values()]
         )
-        self.gt_path_modality_list = []
-        for modality in self.modality_list:
-            modality = modality + "_"
-            modality_file_list = [x for x in self.gt_path_files if modality in x]
-            self.gt_path_modality_list.append(modality_file_list)
+
+    def reload(self):
+        self.sampled_data = np.concatenate(
+            [
+                random.choices(item, k=self.sample)
+                for item in self.modality_data_list.values()
+            ]
+        )
 
     def __len__(self):
-        return len(self.gt_path_files)
+        # return len(self.modality_list) * self.sample
+        return len(self.sampled_data)
+
+    def _load_data(self, idx):
+        img_path = self.sampled_data[idx]
+        filename = img_path.split(".")[0]
+        img, gt = self._load_img(filename)
+
+        return img, gt, filename
+
+    def _load_img(self, filename):
+        # img_path = next(self.img_path.glob(f'{img_path}*'))
+        img_path = (self.img_path / f"{filename}.png").as_posix()
+        img = cv2.imread(img_path)
+        # gt_path = next(self.gt_path.glob(f'{img_path.stem}*'))
+        gt = self._load_gt(filename)
+        return img, gt
+
+    def _load_gt(self, filename):
+        gt_path = Path(self.gt_path / f"{filename}.pkl")
+        if gt_path.exists():
+            with open(gt_path, "rb") as f:
+                rle_encode = pickle.load(f)
+            gt = rle_decode_multivalue(rle_encode, [self.image_size, self.image_size])
+        else:
+            gt_path = Path(self.gt_path / f"{filename}.npy")
+            gt = np.load(gt_path, "r", allow_pickle=True)
+        return gt
 
     def __getitem__(self, index):
-        img_name = basename(self.gt_path_files[index])
-        assert img_name == basename(self.gt_path_files[index]), (
-            "img gt name error" + self.gt_path_files[index] + self.npy_files[index]
-        )
-        img_3c = np.load(
-            join(self.img_path, img_name), "r", allow_pickle=True
-        )  # (H, W, 3)
+
+        img_3c, gt, filename = self._load_data(index)
         img_resize = self.resize_longest_side(img_3c)
         # Resizing
         img_resize = (img_resize - img_resize.min()) / np.clip(
@@ -77,14 +150,12 @@ class NpyDataset(Dataset):
         assert (
             np.max(img_padded) <= 1.0 and np.min(img_padded) >= 0.0
         ), "image should be normalized to [0, 1]"
-        gt = np.load(
-            self.gt_path_files[index], "r", allow_pickle=True
-        )  # multiple labels [0, 1,4,5...], (256,256)
+        # gt = self._load_gt(self.gt_path_files[index])
         gt = cv2.resize(
             gt,
             (img_resize.shape[1], img_resize.shape[0]),
             interpolation=cv2.INTER_NEAREST,
-        ).astype(np.uint8)
+        )
         gt = self.pad_image(gt)  # (256, 256)
         label_ids = np.unique(gt)[1:]
         try:
@@ -92,7 +163,7 @@ class NpyDataset(Dataset):
                 gt == random.choice(label_ids.tolist())
             )  # only one label, (256, 256)
         except:
-            print(img_name, "label_ids.tolist()", label_ids.tolist())
+            print(filename, "label_ids.tolist()", label_ids.tolist())
             gt2D = np.uint8(gt == np.max(gt))  # only one label, (256, 256)
         # add data augmentation: random fliplr and random flipud
         if self.data_aug:
@@ -119,7 +190,7 @@ class NpyDataset(Dataset):
             "image": torch.tensor(img_padded).float(),
             "gt2D": torch.tensor(gt2D[None, :, :]).long(),
             "bboxes": torch.tensor(bboxes[None, None, ...]).float(),  # (B, 1, 4)
-            "image_name": img_name,
+            "image_name": filename,
             "new_size": torch.tensor(
                 np.array([img_resize.shape[0], img_resize.shape[1]])
             ).long(),
@@ -156,10 +227,9 @@ class NpyDataset(Dataset):
 
         return image_padded
 
-    def reload(self, samples=50):
-        new_gt_path_list = []
-        min_sample = np.min([len(x) for x in self.gt_path_modality_list])
-        samples = min(min_sample, samples)
-        for gt_path_modality_file in self.gt_path_modality_list:
-            new_gt_path_list.extend(random.sample(gt_path_modality_file, samples))
-        self.gt_path_files = new_gt_path_list
+
+if __name__ == "__main__":
+    dataset = EncodedDataset("/Datas/competition/cvpr/train")
+    for d in dataset:
+        d
+    pass
