@@ -7,14 +7,6 @@ from glob import glob
 from os import listdir, makedirs
 from os.path import basename, exists, isdir, isfile, join
 from time import time
-from evaluation.iou import cal_iou
-from callback.checkpoint import model_checkpoint
-from evaluation.SurfaceDice import (
-    compute_dice_coefficient,
-    compute_surface_dice_at_tolerance,
-    compute_surface_distances,
-)
-from loss.default_loss import DefaultLoss
 
 import cv2
 import numpy as np
@@ -27,12 +19,20 @@ import wandb
 from matplotlib import pyplot as plt
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm, trange
-from models.medsam_lite import MedSAM_Lite
 
+from callback.checkpoint import model_checkpoint
+from dataset.encoded_dataset import EncodedDataset
 from dataset.npy_dataset import NpyDataset
+from evaluation.iou import cal_iou
+from evaluation.SurfaceDice import (
+    compute_dice_coefficient,
+    compute_surface_dice_at_tolerance,
+    compute_surface_distances,
+)
+from loss.default_loss import DefaultLoss
+from models.medsam_lite import MedSAM_Lite
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
-from dataset.encoded_dataset import EncodedDataset
 
 torch.cuda.empty_cache()
 os.environ["OMP_NUM_THREADS"] = "4"  # export OMP_NUM_THREADS=4
@@ -71,7 +71,15 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         eps=1e-08,
         weight_decay=weight_decay,
     )
-    checkpoint = "workdir/medsam_lite_latest.pth"
+
+    pretrained_checkpoint = "lite_medsam.pth"
+    if pretrained_checkpoint and isfile(pretrained_checkpoint):
+        print(f"Finetuning with pretrained weights {pretrained_checkpoint}")
+        medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
+        medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
+
+    checkpoint = "workdir/None.pth"
+    # checkpoint = "workdir/medsam_lite_latest.pth"
     if checkpoint and isfile(checkpoint):
         print(f"Resuming from checkpoint {checkpoint}")
         checkpoint = torch.load(checkpoint)
@@ -122,11 +130,10 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         # valid
         valid_partial = {}
         for m in valid_dataset.modality_list:
-            valid_partial[f'{m}/iou']=0
-            valid_partial[f'{m}/dsc']=0
-            valid_partial[f'{m}/nsd']=0
+            valid_partial[f"{m}/iou"] = 0
+            valid_partial[f"{m}/dcs"] = 0
+            valid_partial[f"{m}/nsd"] = 0
 
-        valid_partial = {f"{m}/iou": 0 for m in valid_dataset.modality_list}
         valid_partial_count = {m: 0 for m in valid_dataset.modality_list}
         medsam_lite_model.eval()
         with torch.no_grad():
@@ -145,13 +152,19 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
                 ious = cal_iou(pred_mask, gt_mask)
                 dcs = compute_dice_coefficient(gt_mask, pred_mask)
                 spacing = [1.0, 1.0, 1.0]
+
+                # surface_distances = compute_surface_distances(
+                # gt_mask, pred_mask, spacing
+                # )
                 surface_distances = compute_surface_distances(
-                    gt_mask, pred_mask, spacing
+                    gt_mask.to("cpu").numpy()[:, 0, :, :],
+                    pred_mask.to("cpu").numpy()[:, 0, :, :],
+                    spacing,
                 )
                 tolerance_mm = 2
                 nsd = compute_surface_dice_at_tolerance(surface_distances, tolerance_mm)
 
-                for fn, iou in zip(filenames, ious, dcs, nsd):
+                for fn, iou in zip(filenames, ious):
                     m = fn.split("_")[0]
                     valid_partial[f"{m}/iou"] += iou
                     valid_partial[f"{m}/nsd"] += nsd
@@ -174,14 +187,14 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
             mean_nsd += valid_partial[f"{m}/nsd"]
 
         mean_iou /= len(valid_partial)
-        mean_dsc /= len(valid_partial)
+        mean_dcs /= len(valid_partial)
         mean_nsd /= len(valid_partial)
         metrics = {
             "train/loss": train_epoch_loss,
             "valid/loss": valid_epoch_loss,
             "mean/iou": mean_iou,
             "mean/nsd": mean_nsd,
-            "mean/dsc": mean_dsc,
+            "mean/dcs": mean_dcs,
         }
         metrics.update(valid_partial)
 
@@ -195,12 +208,13 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
 
 if __name__ == "__main__":
     work_dir = "./workdir"
-    data_root = "D:\\Datas\\competition\\cvpr2024\\train"
+    # data_root = "D:\\Datas\\competition\\cvpr2024\\train"
+    data_root = "/data1/inqlee0704/medsam/train/compressed"
     medsam_lite_checkpoint = "lite_medsam.pth"
-    num_epochs = 1000
+    num_epochs = 100
     batch_size = 8
-    num_workers = 2
-    device = "cpu"
+    num_workers = 4
+    device = "cuda"
     bbox_shift = 5
     lr = 5e-5
     weight_decay = 0.01
