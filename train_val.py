@@ -95,7 +95,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     )
 
     # * Dataloader
-    train_dataset = EncodedDataset(data_root, data_aug=True, mode="train", sample=10)
+    train_dataset = EncodedDataset(data_root, data_aug=True, mode="train", sample=1000)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 
     for epoch in tqdm(range(start_epoch + 1, num_epochs)):
@@ -134,7 +134,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         for m in modality_list:
 
             valid_dataset = EncodedDataset(
-                data_root, data_aug=False, mode="valid", modality=m, sample=10
+                data_root, data_aug=False, mode="valid", modality=m
             )
             valid_loader = DataLoader(
                 valid_dataset, batch_size=valid_batch_size, shuffle=False
