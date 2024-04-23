@@ -22,6 +22,7 @@ from tqdm import tqdm, trange
 
 from callback.checkpoint import model_checkpoint
 from dataset.encoded_dataset import EncodedDataset
+from dataset.encoded_dataset import _modality_list as modality_list
 from dataset.npy_dataset import NpyDataset
 from evaluation.iou import cal_iou
 from evaluation.SurfaceDice import (
@@ -43,7 +44,7 @@ os.environ["NUMEXPR_NUM_THREADS"] = "6"  # export NUMEXPR_NUM_THREADS=6
 
 
 def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
-
+    valid_batch_size = batch_size * 2
     start_epoch = 0
     best_loss = 1e10
     # * Network
@@ -78,7 +79,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
         medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
 
-    checkpoint = "workdir/None.pth"
+    checkpoint = "workdir/medsam_lite_best.pth"
     # checkpoint = "workdir/medsam_lite_latest.pth"
     if checkpoint and isfile(checkpoint):
         print(f"Resuming from checkpoint {checkpoint}")
@@ -94,28 +95,24 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     )
 
     # * Dataloader
-    train_dataset = EncodedDataset(data_root, data_aug=True, mode="train")
+    train_dataset = EncodedDataset(data_root, data_aug=True, mode="train", sample=10)
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-    valid_dataset = EncodedDataset(data_root, data_aug=False, mode="valid")
-    valid_loader = DataLoader(valid_dataset, batch_size=batch_size * 2, shuffle=False)
 
     for epoch in tqdm(range(start_epoch + 1, num_epochs)):
         train_dataset.reload()  # sample per modality
 
         epoch_start_time = time()
         train_epoch_loss = 0
-        valid_epoch_loss = 0
         pbar = tqdm(train_loader)
         medsam_lite_model.train()
         for step, batch in enumerate(pbar):
             image = batch["image"]
-            gt2D = batch["gt2D"]
+            gt2Ds = batch["gt2D"]
             boxes = batch["bboxes"]
             optimizer.zero_grad()
-            image, gt2D, boxes = image.to(device), gt2D.to(device), boxes.to(device)
-            logits_pred, iou_pred = medsam_lite_model(image, boxes)
-            loss = loss_fn(gt2D, logits_pred, iou_pred)
+            image, gt2Ds, boxes = image.to(device), gt2Ds.to(device), boxes.to(device)
+            logits_preds, iou_preds = medsam_lite_model(image, boxes)
+            loss = loss_fn(gt2Ds, logits_preds, iou_preds)
             train_epoch_loss += loss.item()
             loss.backward()
             optimizer.step()
@@ -126,76 +123,154 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         train_epoch_loss = train_epoch_loss / len(train_loader)
 
         lr_scheduler.step(train_epoch_loss)
-
-        # valid
         valid_partial = {}
-        for m in valid_dataset.modality_list:
-            valid_partial[f"{m}/iou"] = 0
-            valid_partial[f"{m}/dcs"] = 0
-            valid_partial[f"{m}/nsd"] = 0
 
-        valid_partial_count = {m: 0 for m in valid_dataset.modality_list}
+        valid_partial_count = {m: 0 for m in modality_list}
         medsam_lite_model.eval()
-        with torch.no_grad():
 
-            pbar = tqdm(valid_loader)
-            # valid_dataset.total_data_indices
-            for step, batch in enumerate(pbar):
-                image = batch["image"]
-                gt2D = batch["gt2D"]
-                boxes = batch["bboxes"]
-                filenames = batch["image_name"]
-                image, gt2D, boxes = image.to(device), gt2D.to(device), boxes.to(device)
-                logits_pred, iou_pred = medsam_lite_model(image, boxes)
-                pred_mask = torch.sigmoid(logits_pred) > 0.5
-                gt_mask = gt2D.bool()
-                ious = cal_iou(pred_mask, gt_mask)
-                dcs = compute_dice_coefficient(gt_mask, pred_mask)
-                spacing = [1.0, 1.0, 1.0]
+        spacing = [1.0, 1.0, 1.0]
+        valid_epoch_loss = 0
+        valid_count = 0
+        for m in modality_list:
 
-                # surface_distances = compute_surface_distances(
-                # gt_mask, pred_mask, spacing
-                # )
-                surface_distances = compute_surface_distances(
-                    gt_mask.to("cpu").numpy()[:, 0, :, :],
-                    pred_mask.to("cpu").numpy()[:, 0, :, :],
-                    spacing,
+            valid_dataset = EncodedDataset(
+                data_root, data_aug=False, mode="valid", modality=m, sample=10
+            )
+            valid_loader = DataLoader(
+                valid_dataset, batch_size=valid_batch_size, shuffle=False
+            )
+            # valid
+            valid_partial[f"{m}/iou"] = []
+            valid_partial[f"{m}/dcs"] = []
+            valid_partial[f"{m}/nsd"] = []
+            valid_partial[f"{m}/loss"] = []
+
+            with torch.no_grad():
+
+                pbar = tqdm(valid_loader)
+                for step, batch in enumerate(pbar):
+                    image = batch["image"]
+                    gt2Ds = batch["gt2D"]
+                    boxes = batch["bboxes"]
+                    filenames = batch["image_name"]
+                    image, gt2Ds, boxes = (
+                        image.to(device),
+                        gt2Ds.to(device),
+                        boxes.to(device),
+                    )
+                    logits_preds, iou_preds = medsam_lite_model(image, boxes)
+                    pred_masks = torch.sigmoid(logits_preds) > 0.5
+                    gt_masks = gt2Ds.bool()
+                    # ious = cal_iou(pred_mask, gt_mask)
+                    tolerance_mm = 2
+                    for fn, pred_mask, gt_mask, logits_pred, iou_pred, gt2D in zip(
+                        filenames, pred_masks, gt_masks, logits_preds, iou_preds, gt2Ds
+                    ):
+
+                        # surface_distances = compute_surface_distances(
+                        # gt_mask, pred_mask, spacing
+                        # )
+                        surface_distances = compute_surface_distances(
+                            gt_mask.to("cpu").numpy(),
+                            pred_mask.to("cpu").numpy(),
+                            spacing,
+                        )
+                        nsd = compute_surface_dice_at_tolerance(
+                            surface_distances, tolerance_mm
+                        )
+                        dcs = compute_dice_coefficient(gt_mask, pred_mask)
+
+                        iou = cal_iou(pred_mask, gt_mask).flatten()
+                        loss = loss_fn(gt2D[None], logits_pred[None], iou_pred[None])
+                        valid_epoch_loss += loss
+                        valid_partial[f"{m}/loss"].append(loss.item())
+                        valid_partial[f"{m}/iou"].append(iou.item())
+                        valid_partial[f"{m}/nsd"].append(nsd.item())
+                        valid_partial[f"{m}/dcs"].append(dcs.item())
+                        valid_partial_count[m] += 1
+                        valid_count += 1
+                    modality_loss = np.mean(valid_partial[f"{m}/loss"])
+                    pbar.set_description(
+                        f"Epoch {epoch} - {m} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {modality_loss:.4f}"
+                    )
+                indices = np.argsort(valid_partial[f"{m}/loss"])[-3:]
+                imgs = []
+                losses = []
+                valid_dataset
+                for i in indices:
+                    item = valid_dataset[i]
+                    image = item["image"][None]
+                    gt2Ds = item["gt2D"][None]
+                    boxes = item["bboxes"][None]
+                    image, gt2Ds, boxes = (
+                        image.to(device),
+                        gt2Ds.to(device),
+                        boxes.to(device),
+                    )
+                    logits_preds, iou_preds = medsam_lite_model(image, boxes)
+                    pred_masks = torch.sigmoid(logits_preds) > 0.5
+                    gt_masks = gt2Ds.bool()
+                    image = (
+                        (image[0].permute(1, 2, 0) * 255)
+                        .detach()
+                        .cpu()
+                        .numpy()
+                        .astype(np.uint8)
+                    )
+                    pred_mask = ((pred_masks.squeeze()).detach().cpu().numpy()).astype(
+                        np.uint8
+                    )
+                    gt2D = ((gt_masks.squeeze()).detach().cpu().numpy()).astype(
+                        np.uint8
+                    )
+                    pred_mask = cv2.cvtColor(
+                        (pred_mask * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB
+                    )
+                    pred_mask[:, :, 1] = 0
+                    pred_mask[:, :, 2] = 0
+                    gt2D = cv2.cvtColor(
+                        (gt2D * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB
+                    )
+                    gt2D[:, :, 0] = 0
+                    gt2D[:, :, 1] = 0
+                    mask_combined = cv2.addWeighted(pred_mask, 0.5, gt2D, 0.5, 0)
+                    img_combined = cv2.addWeighted(image, 0.6, mask_combined, 0.4, 0)
+                    ys, xs = np.where(pred_mask[:, :, 0])
+                    cv2.rectangle(
+                        img_combined,
+                        (xs.min(), ys.min()),
+                        (xs.max(), ys.max()),
+                        (255, 0, 0),
+                        1,
+                    )
+
+                    ys, xs = np.where(gt2D[:, :, 2])
+                    cv2.rectangle(
+                        img_combined,
+                        (xs.min(), ys.min()),
+                        (xs.max(), ys.max()),
+                        (0, 0, 255),
+                        1,
+                    )
+
+                    losses.append(valid_partial[f"{m}/loss"][i])
+                    imgs.append(img_combined)
+                wandb.log(
+                    {
+                        f"{m} valid": [
+                            wandb.Image(img, caption=f"loss: {l}")
+                            for img, l in zip(imgs, losses)
+                        ]
+                    }
                 )
-                tolerance_mm = 2
-                nsd = compute_surface_dice_at_tolerance(surface_distances, tolerance_mm)
+        valid_epoch_loss = valid_epoch_loss / valid_count
 
-                for fn, iou in zip(filenames, ious):
-                    m = fn.split("_")[0]
-                    valid_partial[f"{m}/iou"] += iou
-                    valid_partial[f"{m}/nsd"] += nsd
-                    valid_partial[f"{m}/dcs"] += dcs
-                    valid_partial_count[m] += 1
-
-                loss = loss_fn(gt2D, logits_pred, iou_pred)
-                valid_epoch_loss += loss.item()
-                pbar.set_description(
-                    f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
-                )
-        valid_epoch_loss = valid_epoch_loss / len(valid_loader)
-        mean_iou = 0
-        for m, c in valid_partial_count.items():
-            valid_partial[f"{m}/iou"] /= c
-            valid_partial[f"{m}/dcs"] /= c
-            valid_partial[f"{m}/nsd"] /= c
-            mean_iou += valid_partial[f"{m}/iou"]
-            mean_dcs += valid_partial[f"{m}/dcs"]
-            mean_nsd += valid_partial[f"{m}/nsd"]
-
-        mean_iou /= len(valid_partial)
-        mean_dcs /= len(valid_partial)
-        mean_nsd /= len(valid_partial)
         metrics = {
             "train/loss": train_epoch_loss,
             "valid/loss": valid_epoch_loss,
-            "mean/iou": mean_iou,
-            "mean/nsd": mean_nsd,
-            "mean/dcs": mean_dcs,
         }
+        for k, v in valid_partial.items():
+            valid_partial[k] = np.mean(v)
         metrics.update(valid_partial)
 
         wandb.log(metrics)
@@ -209,7 +284,11 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
 if __name__ == "__main__":
     work_dir = "./workdir"
     # data_root = "D:\\Datas\\competition\\cvpr2024\\train"
-    data_root = "/data1/inqlee0704/medsam/train/compressed"
+    data_root = [
+        "D:\\Datas\\competition\\cvpr2024\\train",
+        "D:\\Datas\\competition\\cvpr2024\\nuclei",
+    ]
+    # data_root = "/data1/inqlee0704/medsam/train/compressed"
     medsam_lite_checkpoint = "lite_medsam.pth"
     num_epochs = 100
     batch_size = 8
