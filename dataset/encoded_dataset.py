@@ -114,12 +114,13 @@ class EncodedDataset(Dataset):
         )
 
     def reload(self):
-        self.sampled_data = np.concatenate(
-            [
-                random.choices(item, k=self.sample)
-                for item in self.modality_data_list.values()
-            ]
-        )
+        sampled_data_list = []
+        for m in self.modality_list:
+            sampled_data_list.append(
+                random.choices(self.modality_data_list[m], k=self.sample)
+            )
+
+        self.sampled_data = np.concatenate(sampled_data_list)
 
     def __len__(self):
         # return len(self.modality_list) * self.sample
