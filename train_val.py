@@ -178,6 +178,8 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
                 )
         valid_epoch_loss = valid_epoch_loss / len(valid_loader)
         mean_iou = 0
+        mean_dcs = 0
+        mean_nsd = 0
         for m, c in valid_partial_count.items():
             valid_partial[f"{m}/iou"] /= c
             valid_partial[f"{m}/dcs"] /= c
