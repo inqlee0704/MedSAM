@@ -52,6 +52,7 @@ _modality_list = [
     "PET",
     "US",
     "XRay",
+    "nuclei",
 ]
 
 
@@ -64,19 +65,33 @@ class EncodedDataset(Dataset):
         data_aug=True,
         mode="train",
         sample=1000,
+        modality=None,
     ):
-        data_root = Path(data_root)
+        if not isinstance(data_root, list):
+            data_root = [data_root]
+
+        data_root = [Path(d) for d in data_root]
+
         self.data_root = data_root
-        self.gt_path = data_root / "gts"
-        self.img_path = data_root / "imgs"
-        self.gt_path_files = self.gt_path.glob("*.*")
+        # self.gt_path = data_root / "gts"
+        # self.img_path = data_root / "imgs"
+        # self.gt_path_files = self.gt_path.glob("*.*")
         if mode == "train":
-            self.data_list = pd.read_csv(data_root / "train_list.csv")
+            self.data_list = pd.concat(
+                [pd.read_csv(d / "train_list.csv") for d in self.data_root]
+            )
         else:
-            self.data_list = pd.read_csv(data_root / "valid_list.csv")
+            self.data_list = pd.concat(
+                [pd.read_csv(d / "valid_list.csv") for d in self.data_root]
+            )
         self.mode = mode
         self.sample = sample
-        self.modality_list = copy.deepcopy(_modality_list)
+        if modality is None:
+            self.modality_list = copy.deepcopy(_modality_list)
+        else:
+            if not isinstance(modality, list):
+                modality = [modality]
+            self.modality_list = modality
 
         self.image_size = image_size
         self.target_length = image_size
@@ -99,12 +114,13 @@ class EncodedDataset(Dataset):
         )
 
     def reload(self):
-        self.sampled_data = np.concatenate(
-            [
-                random.choices(item, k=self.sample)
-                for item in self.modality_data_list.values()
-            ]
-        )
+        sampled_data_list = []
+        for m in self.modality_list:
+            sampled_data_list.append(
+                random.choices(self.modality_data_list[m], k=self.sample)
+            )
+
+        self.sampled_data = np.concatenate(sampled_data_list)
 
     def __len__(self):
         # return len(self.modality_list) * self.sample
@@ -112,28 +128,37 @@ class EncodedDataset(Dataset):
 
     def _load_data(self, idx):
         img_path = self.sampled_data[idx]
-        filename = img_path.split(".")[0]
+        filename = img_path
         img, gt = self._load_img(filename)
 
         return img, gt, filename
 
     def _load_img(self, filename):
         # img_path = next(self.img_path.glob(f'{img_path}*'))
-        img_path = (self.img_path / f"{filename}.png").as_posix()
+        for data_root in self.data_root:
+            img_path = data_root / "imgs" / f"{filename}.png"
+            if img_path.exists():
+                img_path = img_path.as_posix()
+                break
         img = cv2.imread(img_path)
         # gt_path = next(self.gt_path.glob(f'{img_path.stem}*'))
         gt = self._load_gt(filename)
         return img, gt
 
     def _load_gt(self, filename):
-        gt_path = Path(self.gt_path / f"{filename}.pkl")
-        if gt_path.exists():
-            with open(gt_path, "rb") as f:
-                rle_encode = pickle.load(f)
-            gt = rle_decode_multivalue(rle_encode, [self.image_size, self.image_size])
-        else:
-            gt_path = Path(self.gt_path / f"{filename}.npy")
-            gt = np.load(gt_path, "r", allow_pickle=True)
+        for data_root in self.data_root:
+            pkl_gt_path = data_root / "gts" / f"{filename}.pkl"
+            npy_gt_path = data_root / "gts" / f"{filename}.npy"
+            if pkl_gt_path.exists():
+                with open(pkl_gt_path, "rb") as f:
+                    rle_encode = pickle.load(f)
+                gt = rle_decode_multivalue(
+                    rle_encode, [self.image_size, self.image_size]
+                )
+                break
+            if npy_gt_path.exists():
+                gt = np.load(npy_gt_path, "r", allow_pickle=True)
+                break
         return gt
 
     def __getitem__(self, index):
