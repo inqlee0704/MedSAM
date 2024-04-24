@@ -138,10 +138,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
             lr_scheduler,
             epoch + 1,
         )
-        metrics = {}
-        metrics.update(valid_metrics)
-        metrics.update(train_metrics)
-        wandb.log(metrics)
+
 
 
 def extract_exclude_modalities(valid_metrics, top_k):
