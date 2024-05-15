@@ -15,6 +15,51 @@ import pickle
 
 import numpy as np
 
+def anisotropic_diffusion(img, num_iter, kappa, gamma=0.1):
+    """
+    Apply anisotropic diffusion (Perona-Malik filter) to an image.
+
+    Parameters:
+        img (numpy.ndarray): The input image (grayscale).
+        num_iter (int): Number of iterations to run the diffusion.
+        kappa (float): Conductance coefficient, controls diffusion amount.
+        gamma (float): Integration constant (small timestep).
+
+    Returns:
+        numpy.ndarray: The image after applying anisotropic diffusion.
+    """
+    # Convert image to float and normalize to range 0-1
+    img = img.astype(np.float32) / 255
+
+    # Initialize the output image
+    diffused_img = img.copy()
+
+    for i in range(num_iter):
+        # Calculate gradients
+        north = np.roll(diffused_img, -1, axis=0)
+        south = np.roll(diffused_img, 1, axis=0)
+        east = np.roll(diffused_img, 1, axis=1)
+        west = np.roll(diffused_img, -1, axis=1)
+
+        # Compute differences
+        delta_n = north - diffused_img
+        delta_s = south - diffused_img
+        delta_e = east - diffused_img
+        delta_w = west - diffused_img
+
+        # Calculate the diffusion flux
+        c_n = np.exp(-((delta_n / kappa) ** 2))
+        c_s = np.exp(-((delta_s / kappa) ** 2))
+        c_e = np.exp(-((delta_e / kappa) ** 2))
+        c_w = np.exp(-((delta_w / kappa) ** 2))
+
+        # Update the image
+        diffused_img += gamma * (
+            c_n * delta_n + c_s * delta_s + c_e * delta_e + c_w * delta_w
+        )
+    # Rescale back to 8-bit image values
+    return (diffused_img * 255).astype(np.uint8)
+
 
 def rle_encode_multivalue(mask):
 
@@ -180,6 +225,13 @@ class EncodedDataset(Dataset):
 
         return img, gt, filename
 
+    def _load_processed_img(self, img_path):
+        gray_img = cv2.imread(img_path, cv2.IMREAD_GRAYSCALE)
+        diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+        equalized_img = cv2.equalizeHist(gray_img)
+        merged_img = cv2.merge((gray_img, diffused_img, equalized_img))
+        return merged_img
+
     def _load_img(self, filename):
         # img_path = next(self.img_path.glob(f'{img_path}*'))
         for data_root in self.data_root:
@@ -187,7 +239,7 @@ class EncodedDataset(Dataset):
             if img_path.exists():
                 img_path = img_path.as_posix()
                 break
-        img = cv2.imread(img_path)
+        img = self._load_processed_img(img_path)
         # gt_path = next(self.gt_path.glob(f'{img_path.stem}*'))
         gt = self._load_gt(filename)
         return img, gt

@@ -33,9 +33,11 @@ from evaluation.SurfaceDice import (
 )
 from loss.default_loss import DefaultLoss
 from loss.dice_loss import DiceLoss
-from models.medsam_lite import MedSAM_Lite
+from model.medsam_lite import MedSAM_Lite
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
+
+from efficientvit.sam_model_zoo import create_sam_model
 
 torch.cuda.empty_cache()
 os.environ["OMP_NUM_THREADS"] = "4"  # export OMP_NUM_THREADS=4
@@ -51,14 +53,17 @@ def main(loss_fn, mask_dir, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_
     best_loss = 1e10
     # * Network
 
-    medsam_lite_image_encoder = TinyViT(**image_encoder_cfg)
+    # medsam_lite_image_encoder = TinyViT(**image_encoder_cfg)
 
+    efficientvit_sam = create_sam_model(
+    name="l0", weight_url="./l0.pt",
+    )
     medsam_lite_prompt_encoder = PromptEncoder(**prompt_encoder_cfg)
 
     medsam_lite_mask_decoder = MaskDecoder(**mask_decoder_cfg)
 
     medsam_lite_model = MedSAM_Lite(
-        image_encoder=medsam_lite_image_encoder,
+        image_encoder=efficientvit_sam.image_encoder,
         mask_decoder=medsam_lite_mask_decoder,
         prompt_encoder=medsam_lite_prompt_encoder,
     )
@@ -82,17 +87,17 @@ def main(loss_fn, mask_dir, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_
     #     medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
     #     medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
 
-    checkpoint = "workdir/medsam_lite_best.pth"
-    # workdir/medsam_lite_best.pth"
-    # checkpoint = "workdir/medsam_lite_latest.pth"
-    if checkpoint and isfile(checkpoint):
-        print(f"Resuming from checkpoint {checkpoint}")
-        checkpoint = torch.load(checkpoint)
-        medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        # start_epoch = checkpoint["epoch"]
-        best_loss = checkpoint["loss"]
-        # print(f"Loaded checkpoint from epoch {start_epoch}")
+    # checkpoint = "workdir/medsam_lite_best.pth"
+    # # workdir/medsam_lite_best.pth"
+    # # checkpoint = "workdir/medsam_lite_latest.pth"
+    # if checkpoint and isfile(checkpoint):
+    #     print(f"Resuming from checkpoint {checkpoint}")
+    #     checkpoint = torch.load(checkpoint)
+    #     medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
+    #     optimizer.load_state_dict(checkpoint["optimizer"])
+    #     # start_epoch = checkpoint["epoch"]
+    #     best_loss = checkpoint["loss"]
+    #     # print(f"Loaded checkpoint from epoch {start_epoch}")
 
     medsam_lite_model = medsam_lite_model.to(device)
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -204,17 +209,17 @@ def valid_model(
                 gt2Ds = batch["gt2D"]
                 boxes = batch["bboxes"]
                 filenames = batch["image_name"]
-                box_mask = box_to_mask(boxes.squeeze()).to('cuda')
+                # box_mask = box_to_mask(boxes.squeeze()).to('cuda')
                 image, gt2Ds, boxes = (
                     image.to(device),
                     gt2Ds.to(device),
                     boxes.to(device),
                 )
                 logits_preds, iou_preds = medsam_lite_model(image, boxes)
-                logits_preds = torch.sigmoid(logits_preds) * box_mask
-                logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
+                # logits_preds = torch.sigmoid(logits_preds) * box_mask
+                # logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
                 pred_masks = torch.sigmoid(logits_preds) > 0.5
-                pred_masks *= box_mask
+                # pred_masks *= box_mask
                 gt_masks = gt2Ds.bool()
                 # ious = cal_iou(pred_mask, gt_mask)
                 tolerance_mm = 2
@@ -259,17 +264,17 @@ def valid_model(
                 image = item["image"][None]
                 gt2Ds = item["gt2D"][None]
                 boxes = item["bboxes"][None]
-                box_mask = box_to_mask(boxes.squeeze()[None]).to('cuda')
+                # box_mask = box_to_mask(boxes.squeeze()[None]).to('cuda')
                 image, gt2Ds, boxes = (
                     image.to(device),
                     gt2Ds.to(device),
                     boxes.to(device),
                 )
                 logits_preds, iou_preds = medsam_lite_model(image, boxes)
-                logits_preds = torch.sigmoid(logits_preds) * box_mask
-                logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
+                # logits_preds = torch.sigmoid(logits_preds) * box_mask
+                # logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
                 pred_masks = torch.sigmoid(logits_preds) > 0.5
-                pred_masks *= box_mask
+                # pred_masks *= box_mask
                 gt_masks = gt2Ds.bool()
                 image = (
                     (image[0].permute(1, 2, 0) * 255)
@@ -367,15 +372,15 @@ def train_model(
         image = batch["image"]
         gt2Ds = batch["gt2D"]
         boxes = batch["bboxes"]
-        box_mask = box_to_mask(boxes.squeeze()).to(device)
+        # box_mask = box_to_mask(boxes.squeeze()).to(device)
         image_names = batch['image_name']
         optimizer.zero_grad()
         image, gt2Ds, boxes = image.to(device), gt2Ds.to(device), boxes.to(device)
-        with torch.no_grad():
-            logits_preds, iou_preds = medsam_lite_model(image, boxes)
-            logits_preds = torch.sigmoid(logits_preds) * box_mask
-        logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
-        # logits_preds, iou_preds = medsam_lite_model(image, boxes)
+        # with torch.no_grad():
+        #     logits_preds, iou_preds = medsam_lite_model(image, boxes)
+            # logits_preds = torch.sigmoid(logits_preds) * box_mask
+        # logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
+        logits_preds, iou_preds = medsam_lite_model(image, boxes)
         for img_name, logits_pred, gt2D in zip(image_names, logits_preds, gt2Ds):
             dice_loss = DiceLoss()(logits_pred[None], gt2D[None])
             for m in modality_loss:
@@ -400,12 +405,12 @@ def train_model(
                 image = single_batch["image"]
                 gt2Ds = single_batch["gt2D"]
                 boxes = single_batch["bboxes"]
-                box_mask = box_to_mask(boxes.squeeze()[None]).to(device)
+                # box_mask = box_to_mask(boxes.squeeze()[None]).to(device)
                 image_names = single_batch['image_name']
                 image, gt2Ds, boxes = image.to(device), gt2Ds.to(device), boxes.to(device)
                 logits_preds, iou_preds = medsam_lite_model(image[None], boxes[None])
-                logits_preds = torch.sigmoid(logits_preds) * box_mask
-                logits_preds, iou_preds = medsam_lite_model(image[None], boxes[None], logits_preds)
+                # logits_preds = torch.sigmoid(logits_preds) * box_mask
+                # logits_preds, iou_preds = medsam_lite_model(image[None], boxes[None], logits_preds)
                 pred_masks = torch.sigmoid(logits_preds) > 0.5
                 gt_masks = gt2Ds.bool()
                 image = (
@@ -480,11 +485,11 @@ if __name__ == "__main__":
     # data_root = "/data1/inqlee0704/medsam/train/compressed"
     medsam_lite_checkpoint = "lite_medsam.pth"
     num_epochs = 1000
-    batch_size = 8
+    batch_size = 32
     num_workers = 4
     device = "cuda"
     bbox_shift = 5
-    lr = 1e-3
+    lr = 5e-5
     weight_decay = 0.01
     iou_loss_weight = 1.0
     seg_loss_weight = 1.0
