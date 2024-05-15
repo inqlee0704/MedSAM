@@ -95,7 +95,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     # * Network
 
     efficientvit_sam = create_sam_model(
-    name="l0", weight_url="../efficientvit/assets/checkpoints/sam/l0.pt",
+    name="l0", weight_url="./l0.pt",
     )
 
     medsam_lite_prompt_encoder = PromptEncoder(**prompt_encoder_cfg)
@@ -126,7 +126,8 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     #     medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
     #     medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
 
-    # checkpoint = "workdir/medsam_lite_best22.pth"
+    # checkpoint = "l0.pt"
+    # # workdir/medsam_lite_best22.pth"
     # # checkpoint = "workdir/medsam_lite_latest.pth"
     # if checkpoint and isfile(checkpoint):
     #     print(f"Resuming from checkpoint {checkpoint}")
@@ -135,7 +136,7 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     #     optimizer.load_state_dict(checkpoint["optimizer"])
     #     # start_epoch = checkpoint["epoch"]
     #     best_loss = checkpoint["loss"]
-    #     # print(f"Loaded checkpoint from epoch {start_epoch}")
+        # print(f"Loaded checkpoint from epoch {start_epoch}")
 
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.9, patience=5, cooldown=0
@@ -401,13 +402,13 @@ def train_model(
 
 if __name__ == "__main__":
     work_dir = "./workdir"
-    # data_root = [
-    #     "D:\\Datas\\competition\\cvpr2024\\train",
-    #     "D:\\Datas\\competition\\cvpr2024\\nuclei",
-    # ]
     data_root = [
-        "/data1/inqlee0704/medsam/train/compressed",
-        "/data1/inqlee0704/medsam/train/nuclei",
+        "D:\\Datas\\competition\\cvpr2024\\train",
+        "D:\\Datas\\competition\\cvpr2024\\nuclei",
+    ]
+    data_root = [
+        # "/data1/inqlee0704/medsam/train/compressed",
+        # "/data1/inqlee0704/medsam/train/nuclei",
     ]
     # medsam_lite_checkpoint = "lite_medsam.pth"
     num_epochs = 1000
@@ -447,7 +448,7 @@ if __name__ == "__main__":
     loss_fn = DefaultLoss(seg_loss_weight, ce_loss_weight, iou_loss_weight)
     main(
         loss_fn,
-        image_encoder_cfg=image_encoder_cfg,
+        image_encoder_cfg=None,
         prompt_encoder_cfg=prompt_encoder_cfg,
         mask_decoder_cfg=mask_decoder_cfg,
     )
