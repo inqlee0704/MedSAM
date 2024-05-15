@@ -32,9 +32,53 @@ from evaluation.SurfaceDice import (
 )
 from loss.default_loss import DefaultLoss
 from loss.dice_loss import DiceLoss
-from models.medsam_lite import MedSAM_Lite
+# from models.medsam_lite import MedSAM_Lite
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
+
+from efficientvit.sam_model_zoo import create_sam_model
+
+class MedSAM_Lite(nn.Module):
+    def __init__(self, image_encoder, mask_decoder, prompt_encoder):
+        super().__init__()
+        self.image_encoder = image_encoder
+        self.mask_decoder = mask_decoder
+        self.prompt_encoder = prompt_encoder
+
+    def forward(self, image, boxes):
+        image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
+
+        sparse_embeddings, dense_embeddings = self.prompt_encoder(
+            points=None,
+            boxes=boxes,
+            masks=None,
+        )
+        low_res_masks, iou_predictions = self.mask_decoder(
+            image_embeddings=image_embedding,  # (B, 256, 64, 64)
+            image_pe=self.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
+            sparse_prompt_embeddings=sparse_embeddings,  # (B, 2, 256)
+            dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
+            multimask_output=False,
+        )  # (B, 1, 256, 256)
+
+        return low_res_masks, iou_predictions
+
+    @torch.no_grad()
+    def postprocess_masks(self, masks, new_size, original_size):
+        """
+        Do cropping and resizing
+        """
+        # Crop
+        masks = masks[:, :, : new_size[0], : new_size[1]]
+        # Resize
+        masks = F.interpolate(
+            masks,
+            size=(original_size[0], original_size[1]),
+            mode="bilinear",
+            align_corners=False,
+        )
+
+        return masks
 
 torch.cuda.empty_cache()
 os.environ["OMP_NUM_THREADS"] = "4"  # export OMP_NUM_THREADS=4
@@ -50,14 +94,16 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     best_loss = 1e10
     # * Network
 
-    medsam_lite_image_encoder = TinyViT(**image_encoder_cfg)
+    efficientvit_sam = create_sam_model(
+    name="l0", weight_url="../efficientvit/assets/checkpoints/sam/l0.pt",
+    )
 
     medsam_lite_prompt_encoder = PromptEncoder(**prompt_encoder_cfg)
 
     medsam_lite_mask_decoder = MaskDecoder(**mask_decoder_cfg)
 
     medsam_lite_model = MedSAM_Lite(
-        image_encoder=medsam_lite_image_encoder,
+        image_encoder=efficientvit_sam.image_encoder,
         mask_decoder=medsam_lite_mask_decoder,
         prompt_encoder=medsam_lite_prompt_encoder,
     )
@@ -74,22 +120,22 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         weight_decay=weight_decay,
     )
 
-    pretrained_checkpoint = "lite_medsam.pth"
-    if pretrained_checkpoint and isfile(pretrained_checkpoint):
-        print(f"Finetuning with pretrained weights {pretrained_checkpoint}")
-        medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
-        medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
+    # pretrained_checkpoint = "lite_medsam.pth"
+    # if pretrained_checkpoint and isfile(pretrained_checkpoint):
+    #     print(f"Finetuning with pretrained weights {pretrained_checkpoint}")
+    #     medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
+    #     medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
 
-    checkpoint = "workdir/medsam_lite_best.pth"
-    # checkpoint = "workdir/medsam_lite_latest.pth"
-    if checkpoint and isfile(checkpoint):
-        print(f"Resuming from checkpoint {checkpoint}")
-        checkpoint = torch.load(checkpoint)
-        medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
-        optimizer.load_state_dict(checkpoint["optimizer"])
-        # start_epoch = checkpoint["epoch"]
-        best_loss = checkpoint["loss"]
-        # print(f"Loaded checkpoint from epoch {start_epoch}")
+    # checkpoint = "workdir/medsam_lite_best22.pth"
+    # # checkpoint = "workdir/medsam_lite_latest.pth"
+    # if checkpoint and isfile(checkpoint):
+    #     print(f"Resuming from checkpoint {checkpoint}")
+    #     checkpoint = torch.load(checkpoint)
+    #     medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
+    #     optimizer.load_state_dict(checkpoint["optimizer"])
+    #     # start_epoch = checkpoint["epoch"]
+    #     best_loss = checkpoint["loss"]
+    #     # print(f"Loaded checkpoint from epoch {start_epoch}")
 
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.9, patience=5, cooldown=0
@@ -97,7 +143,13 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
 
     top_k = 3
     train_dataset = EncodedDataset(
-        data_root, data_aug=True, mode="train", sample=1000, modality=modality_list
+        data_root,
+        data_aug=True,
+        mode="train",
+        # sample=100,
+        sample=1000,
+        modality=modality_list,
+        # data_root, data_aug=True, mode="train", sample=1000, modality=modality_list
     )
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     # * Dataloader
@@ -140,7 +192,6 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         )
 
 
-
 def extract_exclude_modalities(valid_metrics, top_k):
     modalities = []
     losses = []
@@ -168,7 +219,13 @@ def valid_model(
 
     for m in modality_list:
         valid_dataset = EncodedDataset(
-            data_root, data_aug=False, mode="valid", modality=m
+            data_root,
+            data_aug=False,
+            mode="valid",
+            # sample=100,
+            sample=1000,
+            modality=m,
+            # data_root, data_aug=False, mode="valid", modality=m
         )
         valid_loader = DataLoader(
             valid_dataset, batch_size=valid_batch_size, shuffle=False
@@ -344,16 +401,18 @@ def train_model(
 
 if __name__ == "__main__":
     work_dir = "./workdir"
-    # data_root = "D:\\Datas\\competition\\cvpr2024\\train"
+    # data_root = [
+    #     "D:\\Datas\\competition\\cvpr2024\\train",
+    #     "D:\\Datas\\competition\\cvpr2024\\nuclei",
+    # ]
     data_root = [
-        "D:\\Datas\\competition\\cvpr2024\\train",
-        "D:\\Datas\\competition\\cvpr2024\\nuclei",
+        "/data1/inqlee0704/medsam/train/compressed",
+        "/data1/inqlee0704/medsam/train/nuclei",
     ]
-    # data_root = "/data1/inqlee0704/medsam/train/compressed"
-    medsam_lite_checkpoint = "lite_medsam.pth"
-    num_epochs = 100
-    batch_size = 8
-    num_workers = 4
+    # medsam_lite_checkpoint = "lite_medsam.pth"
+    num_epochs = 1000
+    batch_size = 32
+    num_workers = 8
     device = "cuda"
     bbox_shift = 5
     lr = 5e-5
@@ -362,32 +421,11 @@ if __name__ == "__main__":
     seg_loss_weight = 1.0
     ce_loss_weight = 1.0
     do_sancheck = True
-    checkpoint = "workdir/temp.pth"
+    # checkpoint = "workdir/temp.pth"
     # checkpoint = "workdir/medsam_lite_latest.pth"
     debug = False
     makedirs(work_dir, exist_ok=True)
     wandb.init(project="medsam")
-    image_encoder_cfg = dict(
-        img_size=256,
-        in_chans=3,
-        embed_dims=[
-            64,  ## (64, 256, 256)
-            128,  ## (128, 128, 128)
-            160,  ## (160, 64, 64)
-            320,  ## (320, 64, 64)
-        ],
-        depths=[2, 2, 6, 2],
-        num_heads=[2, 4, 5, 10],
-        window_sizes=[7, 7, 14, 7],
-        mlp_ratio=4.0,
-        drop_rate=0.0,
-        drop_path_rate=0.0,
-        use_checkpoint=False,
-        mbconv_expand_ratio=4.0,
-        local_conv_size=3,
-        layer_lr_decay=0.8,
-    )
-
     prompt_encoder_cfg = dict(
         embed_dim=256,
         image_embedding_size=(64, 64),

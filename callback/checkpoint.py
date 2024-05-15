@@ -14,10 +14,10 @@ def model_checkpoint(
         "best_loss": best_loss,
     }
 
-    torch.save(checkpoint, join(work_dir, "medsam_lite_latest.pth"))
+    torch.save(checkpoint, join(work_dir, "efficientvit_sam_latest.pth"))
     if valid_epoch_loss < best_loss:
         print(f"New best loss: {best_loss:.4f} -> {valid_epoch_loss:.4f}")
         best_loss = valid_epoch_loss
         checkpoint["best_loss"] = best_loss
-        torch.save(checkpoint, join(work_dir, "medsam_lite_best.pth"))
+        torch.save(checkpoint, join(work_dir, "efficientvit_sam_best.pth"))
     return best_loss

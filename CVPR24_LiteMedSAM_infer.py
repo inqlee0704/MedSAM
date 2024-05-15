@@ -1,21 +1,75 @@
-from os import listdir, makedirs
-from os.path import join, isfile, basename
+import argparse
+from collections import OrderedDict
+from datetime import datetime
 from glob import glob
-from tqdm import tqdm
+from os import listdir, makedirs
+from os.path import basename, isfile, join
 from time import time
+
+import cv2
 import numpy as np
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from matplotlib import pyplot as plt
+from tqdm import tqdm
 
 from segment_anything.modeling import MaskDecoder, PromptEncoder, TwoWayTransformer
 from tiny_vit_sam import TinyViT
-from matplotlib import pyplot as plt
-import cv2
-import argparse
-from collections import OrderedDict
-import pandas as pd
-from datetime import datetime
+from efficientvit.sam_model_zoo import create_sam_model
+
+
+def anisotropic_diffusion(img, num_iter, kappa, gamma=0.1):
+    """
+    Apply anisotropic diffusion (Perona-Malik filter) to an image.
+
+    Parameters:
+        img (numpy.ndarray): The input image (grayscale).
+        num_iter (int): Number of iterations to run the diffusion.
+        kappa (float): Conductance coefficient, controls diffusion amount.
+        gamma (float): Integration constant (small timestep).
+
+    Returns:
+        numpy.ndarray: The image after applying anisotropic diffusion.
+    """
+    # Convert image to float and normalize to range 0-1
+    img = img.astype(np.float32) / 255
+
+    # Initialize the output image
+    diffused_img = img.copy()
+
+    for i in range(num_iter):
+        # Calculate gradients
+        north = np.roll(diffused_img, -1, axis=0)
+        south = np.roll(diffused_img, 1, axis=0)
+        east = np.roll(diffused_img, 1, axis=1)
+        west = np.roll(diffused_img, -1, axis=1)
+
+        # Compute differences
+        delta_n = north - diffused_img
+        delta_s = south - diffused_img
+        delta_e = east - diffused_img
+        delta_w = west - diffused_img
+
+        # Calculate the diffusion flux
+        c_n = np.exp(-((delta_n / kappa) ** 2))
+        c_s = np.exp(-((delta_s / kappa) ** 2))
+        c_e = np.exp(-((delta_e / kappa) ** 2))
+        c_w = np.exp(-((delta_w / kappa) ** 2))
+
+        # Update the image
+        diffused_img += gamma * (
+            c_n * delta_n + c_s * delta_s + c_e * delta_e + c_w * delta_w
+        )
+    # Rescale back to 8-bit image values
+    return (diffused_img * 255).astype(np.uint8)
+
+
+def rgb2gray(rgb):
+    return np.array(
+        np.round(np.dot(rgb[..., :3], [0.2989, 0.5870, 0.1140])), dtype="uint8"
+    )
 
 
 # %% set seeds
@@ -30,7 +84,9 @@ parser.add_argument(
     "-i",
     "--input_dir",
     type=str,
-    default="test_demo/imgs/",
+    default="/data1/inqlee0704/medsam/valid/imgs",
+    # default="/data1/inqlee0704/medsam/valid/imgs",
+    # default="test_demo/imgs/",
     # required=True,
     help="root directory of the data",
 )
@@ -38,13 +94,16 @@ parser.add_argument(
     "-o",
     "--output_dir",
     type=str,
-    default="test_demo/segs/",
+    default="results/warm-durian-85",
+    # default="test_demo/segs/",
     help="directory to save the prediction",
 )
 parser.add_argument(
     "-lite_medsam_checkpoint_path",
     type=str,
-    default="work_dir/LiteMedSAM/lite_medsam.pth",
+    default="/home/inqlee0704/medsam/MedSAM/workdir/warm-durian-85/efficientvit_sam_best.pth",
+    # default="/home/inqlee0704/medsam/MedSAM/workdir/eternal-silence-73/medsam_lite_best.pth",
+    # default="work_dir/LiteMedSAM/lite_medsam.pth",
     help="path to the checkpoint of MedSAM-Lite",
 )
 parser.add_argument(
@@ -61,14 +120,15 @@ parser.add_argument(
 )
 parser.add_argument(
     "--save_overlay",
-    default=True,
+    # default=True,
+    default=False,
     action="store_true",
     help="whether to save the overlay image",
 )
 parser.add_argument(
     "-png_save_dir",
     type=str,
-    default="./overlay",
+    default="./overlay/warm-durian-85",
     help="directory to save the overlay image",
 )
 
@@ -350,6 +410,9 @@ medsam_lite_image_encoder = TinyViT(
     layer_lr_decay=0.8,
 )
 
+efficientvit_sam = create_sam_model(
+name="l0", weight_url="../efficientvit/assets/checkpoints/sam/l0.pt",
+)
 medsam_lite_prompt_encoder = PromptEncoder(
     embed_dim=256,
     image_embedding_size=(64, 64),
@@ -371,13 +434,15 @@ medsam_lite_mask_decoder = MaskDecoder(
 )
 
 medsam_lite_model = MedSAM_Lite(
-    image_encoder=medsam_lite_image_encoder,
+    image_encoder=efficientvit_sam.image_encoder,
+    # image_encoder=medsam_lite_image_encoder,
     mask_decoder=medsam_lite_mask_decoder,
     prompt_encoder=medsam_lite_prompt_encoder,
 )
 
 lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location="cpu")
-medsam_lite_model.load_state_dict(lite_medsam_checkpoint)
+medsam_lite_model.load_state_dict(lite_medsam_checkpoint["model"])
+# medsam_lite_model.load_state_dict(lite_medsam_checkpoint)
 medsam_lite_model.to(device)
 medsam_lite_model.eval()
 
@@ -386,6 +451,11 @@ def MedSAM_infer_npz_2D(img_npz_file):
     npz_name = basename(img_npz_file)
     npz_data = np.load(img_npz_file, "r", allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data["imgs"]  # (H, W, 3)
+    # preprocess image
+    gray_img = rgb2gray(img_3c)
+    diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+    equalized_img = cv2.equalizeHist(gray_img)
+    img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
     assert (
         np.max(img_3c) < 256
     ), f"input data should be in range [0, 255], but got {np.unique(img_3c)}"
@@ -468,6 +538,11 @@ def MedSAM_infer_npz_3D(img_npz_file):
                 img_3c = np.repeat(img_2d[:, :, None], 3, axis=-1)
             else:
                 img_3c = img_2d
+            # preprocess image
+            gray_img = rgb2gray(img_3c)
+            diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+            equalized_img = cv2.equalizeHist(gray_img)
+            img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
             H, W, _ = img_3c.shape
 
             img_256 = resize_longest_side(img_3c, 256)
@@ -511,6 +586,11 @@ def MedSAM_infer_npz_3D(img_npz_file):
                 img_3c = np.repeat(img_2d[:, :, None], 3, axis=-1)
             else:
                 img_3c = img_2d
+            # preprocess image
+            gray_img = rgb2gray(img_3c)
+            diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+            equalized_img = cv2.equalizeHist(gray_img)
+            img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
             H, W, _ = img_3c.shape
 
             img_256 = resize_longest_side(img_3c)
@@ -583,7 +663,8 @@ if __name__ == "__main__":
         if basename(img_npz_file).startswith("3D"):
             MedSAM_infer_npz_3D(img_npz_file)
         else:
-            MedSAM_infer_npz_2D(img_npz_file)
+            continue
+            # MedSAM_infer_npz_2D(img_npz_file)
         end_time = time()
         efficiency["case"].append(basename(img_npz_file))
         efficiency["time"].append(end_time - start_time)
