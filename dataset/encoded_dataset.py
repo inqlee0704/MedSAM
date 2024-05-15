@@ -41,7 +41,27 @@ def rle_decode_multivalue(runs, shape):
 
 
 _modality_list = [
-    "CT",
+    # "CT",
+    "CT_AMOS",
+    "CT_AbdTumor",
+    "CT_AbdomenCT",
+    "CT_COVID-19-20-CT-SegChallenge",
+    "CT_CT-ORG",
+    "CT_LIDC-IDRI",
+    "CT_LungLesions",
+    "CT_LungMasks",
+    "CT_TCIA-LCTSC",
+    "CT_TotalSeg",
+    "MR_AMOSMR",
+    "MR_BraTS",
+    "MR_Heart",
+    "MR_ISLES2022",
+    "MR_Prostate",
+    "MR_QIN-PROSTATE-Lesion",
+    "MR_QIN-PROSTATE-Prostate",
+    "MR_SpineMR",
+    "MR_WMH",
+    "MR_crossmoda",
     "Dermoscopy",
     "Endoscopy",
     "Fundus",
@@ -66,10 +86,11 @@ class EncodedDataset(Dataset):
         mode="train",
         sample=1000,
         modality=None,
+        filter_list_file_path=None
     ):
         if not isinstance(data_root, list):
             data_root = [data_root]
-
+        self.filter_list_file_path = filter_list_file_path
         data_root = [Path(d) for d in data_root]
 
         self.data_root = data_root
@@ -114,13 +135,39 @@ class EncodedDataset(Dataset):
         )
 
     def reload(self):
-        sampled_data_list = []
-        for m in self.modality_list:
-            sampled_data_list.append(
-                random.choices(self.modality_data_list[m], k=self.sample)
+
+        with open('D:\\Datas\\competition\\result\\delete_list.xlsx', 'rb') as f:
+            info = pd.read_excel(f)
+        self.filter_list = info.filename.values.tolist()
+        for i, name in enumerate(self.filter_list):
+            if 'train-' in name:
+                self.filter_list[i] = self.filter_list[len('train-'):]
+
+            if 'valid-' in name:
+                self.filter_list[i] = self.filter_list[len('valid-'):]
+
+        # filter_map = {m:[] for m in self.modality_list}
+
+        # for m in self.modality_data_list:
+        #     self.modality_data_list[m] = list(filter(lambda x: x not in filter_list, self.modality_data_list[m]))
+        if self.sample == 0:
+
+            self.sampled_data = np.concatenate(
+                [item for item in self.modality_data_list.values()]
             )
 
-        self.sampled_data = np.concatenate(sampled_data_list)
+        else:
+            sampled_data_list = []
+            for m in self.modality_list:
+                sampled_data_list.append(
+                    random.choices(self.modality_data_list[m], k=min(self.sample, len(self.modality_data_list[m])))
+                )
+
+            self.sampled_data = np.concatenate(sampled_data_list)
+        # else:
+        #     self.sampled_data = np.concatenate(
+        #         [item for item in self.modality_data_list.values()]
+        #     )
 
     def __len__(self):
         # return len(self.modality_list) * self.sample
@@ -164,6 +211,20 @@ class EncodedDataset(Dataset):
     def __getitem__(self, index):
 
         img_3c, gt, filename = self._load_data(index)
+        if filename in self.filter_list:
+            while filename in self.filter_list:
+                for m in self.modality_data_list:
+
+                    if filename in self.modality_data_list[m]:
+                        i = self.modality_data_list[m].index(filename)
+                        del self.modality_data_list[m][i]
+                        break
+                filename = random.choice(self.modality_data_list[m])
+            img_3c, gt = self._load_img(filename)
+
+        return self._preprocess(img_3c, gt, filename)
+
+    def _preprocess(self, img_3c, gt, filename):
         img_resize = self.resize_longest_side(img_3c)
         # Resizing
         img_resize = (img_resize - img_resize.min()) / np.clip(

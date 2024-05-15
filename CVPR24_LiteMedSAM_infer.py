@@ -44,7 +44,7 @@ parser.add_argument(
 parser.add_argument(
     "-lite_medsam_checkpoint_path",
     type=str,
-    default="work_dir/LiteMedSAM/lite_medsam.pth",
+    default="workdir/lite_medsam.pth",
     help="path to the checkpoint of MedSAM-Lite",
 )
 parser.add_argument(
@@ -73,10 +73,13 @@ parser.add_argument(
 )
 
 args = parser.parse_args()
-
+# -i D:\Datas\competition\cvpr2024\validate\imgs\ -o valid -lite_medsam_checkpoint_path .\workdir\medsam_lite_best.pt
 data_root = args.input_dir
+# data_root = 'C:\\Users\\rnwhd\\develop\\competition\\MedSAM\\data\\validate\\imgs'
 pred_save_dir = args.output_dir
+# pred_save_dir = "valid"
 save_overlay = args.save_overlay
+# save_overlay = True
 num_workers = args.num_workers
 if save_overlay:
     assert (
@@ -86,6 +89,7 @@ if save_overlay:
     makedirs(png_save_dir, exist_ok=True)
 
 lite_medsam_checkpoint_path = args.lite_medsam_checkpoint_path
+# lite_medsam_checkpoint_path = "C:\\Users\\rnwhd\\develop\\competition\\MedSAM\\workdir\\medsam_lite_best.pth"
 makedirs(pred_save_dir, exist_ok=True)
 device = torch.device(args.device)
 image_size = 256
@@ -287,6 +291,15 @@ def resize_box_to_256(box, original_size):
 
     return new_box
 
+def box_to_mask(boxes):
+    boxes = torch.reshape(torch.from_numpy(boxes), (-1, 4))
+    board = torch.zeros((len(boxes), 1,256,256), dtype=torch.int)
+    for i, b in enumerate(boxes):
+        lt = b[:2].type(torch.int)
+        rb = b[2:].type(torch.int)
+        board[i,0, lt[1]:rb[1]+1, lt[0]:rb[0]+1] = 1
+    return board.type(torch.bool)
+
 
 @torch.no_grad()
 def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
@@ -302,6 +315,7 @@ def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
     Returns:
         tuple: A tuple containing the segmented image and the intersection over union (IoU) score.
     """
+    box_mask = box_to_mask(box_256.squeeze()).to('cpu')
     box_torch = torch.as_tensor(
         box_256[None, None, ...], dtype=torch.float, device=img_embed.device
     )
@@ -318,13 +332,29 @@ def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
         dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
         multimask_output=False,
     )
-
+    logits_preds = torch.sigmoid(low_res_logits) * box_mask
+    # logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
+    
+    sparse_embeddings, dense_embeddings = medsam_model.prompt_encoder(
+        points=None,
+        boxes=box_torch,
+        masks=logits_preds,
+    )
+    low_res_logits, iou = medsam_model.mask_decoder(
+        image_embeddings=img_embed,  # (B, 256, 64, 64)
+        image_pe=medsam_model.prompt_encoder.get_dense_pe(),  # (1, 256, 64, 64)
+        sparse_prompt_embeddings=sparse_embeddings,  # (B, 2, 256)
+        dense_prompt_embeddings=dense_embeddings,  # (B, 256, 64, 64)
+        multimask_output=False,
+    )
+    # * ====
+    low_res_logits = torch.sigmoid(low_res_logits) 
+    low_res_logits = low_res_logits* box_mask
     low_res_pred = medsam_model.postprocess_masks(
         low_res_logits, new_size, original_size
     )
-    low_res_pred = torch.sigmoid(low_res_pred)
     low_res_pred = low_res_pred.squeeze().cpu().numpy()
-    medsam_seg = (low_res_pred > 0.5).astype(np.uint8)
+    medsam_seg = (low_res_pred > 0.5).astype(np.uint16)
 
     return medsam_seg, iou
 
@@ -377,7 +407,7 @@ medsam_lite_model = MedSAM_Lite(
 )
 
 lite_medsam_checkpoint = torch.load(lite_medsam_checkpoint_path, map_location="cpu")
-medsam_lite_model.load_state_dict(lite_medsam_checkpoint)
+medsam_lite_model.load_state_dict(lite_medsam_checkpoint['model'])
 medsam_lite_model.to(device)
 medsam_lite_model.eval()
 
@@ -391,7 +421,7 @@ def MedSAM_infer_npz_2D(img_npz_file):
     ), f"input data should be in range [0, 255], but got {np.unique(img_3c)}"
     H, W = img_3c.shape[:2]
     boxes = npz_data["boxes"]
-    segs = np.zeros(img_3c.shape[:2], dtype=np.uint8)
+    segs = np.zeros(img_3c.shape[:2], dtype=np.uint16)
 
     ## preprocessing
     img_256 = resize_longest_side(img_3c, 256)
@@ -434,7 +464,7 @@ def MedSAM_infer_npz_2D(img_npz_file):
             color = np.random.rand(3)
             box_viz = box
             show_box(box_viz, ax[1], edgecolor=color)
-            show_mask((segs == i + 1).astype(np.uint8), ax[1], mask_color=color)
+            show_mask((segs == i + 1).astype(np.uint16), ax[1], mask_color=color)
 
         plt.tight_layout()
         plt.savefig(join(png_save_dir, npz_name.split(".")[0] + ".png"), dpi=300)
@@ -448,11 +478,11 @@ def MedSAM_infer_npz_3D(img_npz_file):
     spacing = npz_data[
         "spacing"
     ]  # not used in this demo because it treats each slice independently
-    segs = np.zeros_like(img_3D, dtype=np.uint8)
+    segs = np.zeros_like(img_3D, dtype=np.uint16)
     boxes_3D = npz_data["boxes"]  # [[x_min, y_min, z_min, x_max, y_max, z_max]]
 
     for idx, box3D in enumerate(boxes_3D, start=1):
-        segs_3d_temp = np.zeros_like(img_3D, dtype=np.uint8)
+        segs_3d_temp = np.zeros_like(img_3D, dtype=np.uint16)
         x_min, y_min, z_min, x_max, y_max, z_max = box3D
         assert (
             z_min < z_max

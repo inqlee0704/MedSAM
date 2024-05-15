@@ -1,4 +1,5 @@
 import argparse
+from pathlib import Path
 import os
 import random
 from copy import deepcopy
@@ -44,7 +45,7 @@ os.environ["VECLIB_MAXIMUM_THREADS"] = "4"  # export VECLIB_MAXIMUM_THREADS=4
 os.environ["NUMEXPR_NUM_THREADS"] = "6"  # export NUMEXPR_NUM_THREADS=6
 
 
-def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
+def main(loss_fn, mask_dir, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
     valid_batch_size = batch_size * 2
     start_epoch = 0
     best_loss = 1e10
@@ -74,13 +75,15 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         weight_decay=weight_decay,
     )
 
-    pretrained_checkpoint = "lite_medsam.pth"
-    if pretrained_checkpoint and isfile(pretrained_checkpoint):
-        print(f"Finetuning with pretrained weights {pretrained_checkpoint}")
-        medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
-        medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
+    # pretrained_checkpoint = "workdir/lite_medsam.pth"
+    # # metricslite_medsam.pth"
+    # if pretrained_checkpoint and isfile(pretrained_checkpoint):
+    #     print(f"Finetuning with pretrained weights {pretrained_checkpoint}")
+    #     medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
+    #     medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
 
     checkpoint = "workdir/medsam_lite_best.pth"
+    # workdir/medsam_lite_best.pth"
     # checkpoint = "workdir/medsam_lite_latest.pth"
     if checkpoint and isfile(checkpoint):
         print(f"Resuming from checkpoint {checkpoint}")
@@ -91,26 +94,29 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         best_loss = checkpoint["loss"]
         # print(f"Loaded checkpoint from epoch {start_epoch}")
 
+    medsam_lite_model = medsam_lite_model.to(device)
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.9, patience=5, cooldown=0
     )
 
-    top_k = 3
+    top_k = 5
     train_dataset = EncodedDataset(
         data_root, data_aug=True, mode="train", sample=1000, modality=modality_list
     )
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     # * Dataloader
     total_modality_list = modality_list
-    for epoch in tqdm(range(start_epoch + 1, num_epochs, 2)):
+    for epoch in tqdm(range(start_epoch + 1, num_epochs)):
         valid_metrics, best_loss = valid_model(
-            loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss
+            loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss, mask_dir
         )
-        exclude_modalites = extract_exclude_modalities(valid_metrics, top_k)
+        # exclude_modalites = extract_exclude_modalities(valid_metrics, top_k)
 
         train_dataset.modality_list = total_modality_list
         train_dataset.reload()  # sample per modality
         train_metrics = train_model(
+            mask_dir,
+            train_dataset,
             train_loader,
             loss_fn,
             medsam_lite_model,
@@ -123,21 +129,23 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
         metrics.update(train_metrics)
         wandb.log(metrics)
 
-        partial_modality_list = deepcopy(total_modality_list)
-        partial_modality_list = list(
-            filter(lambda x: x not in exclude_modalites, partial_modality_list)
-        )
+        # partial_modality_list = deepcopy(total_modality_list)
+        # partial_modality_list = list(
+        #     filter(lambda x: x not in exclude_modalites, partial_modality_list)
+        # )
 
-        train_dataset.modality_list = partial_modality_list
-        train_dataset.reload()  # sample per modality
-        train_metrics = train_model(
-            train_loader,
-            loss_fn,
-            medsam_lite_model,
-            optimizer,
-            lr_scheduler,
-            epoch + 1,
-        )
+        # train_dataset.modality_list = partial_modality_list
+        # train_dataset.reload()  # sample per modality
+        # train_metrics = train_model(
+        #     mask_dir,
+        #     train_dataset,
+        #     train_loader,
+        #     loss_fn,
+        #     medsam_lite_model,
+        #     optimizer,
+        #     lr_scheduler,
+        #     epoch + 1,
+        # )
 
 
 
@@ -153,10 +161,19 @@ def extract_exclude_modalities(valid_metrics, top_k):
     exclude_modalites = [modalities[i] for i in exclude_indices]
     return exclude_modalites
 
+def box_to_mask(boxes):
+    boxes = torch.reshape(boxes, (-1, 4))
+    board = torch.zeros((len(boxes), 1,256,256), dtype=torch.int)
+    for i, b in enumerate(boxes):
+        lt = b[:2].type(torch.int)
+        rb = b[2:].type(torch.int)
+        board[i,0, lt[1]:rb[1]+1, lt[0]:rb[0]+1] = 1
+    return board.type(torch.bool)
 
 def valid_model(
-    loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss
+    loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss, mask_dir
 ):
+    mask_dir = Path(mask_dir)
     valid_partial = {}
 
     valid_partial_count = {m: 0 for m in modality_list}
@@ -165,11 +182,11 @@ def valid_model(
     spacing = [1.0, 1.0, 1.0]
     valid_epoch_loss = 0
     valid_count = 0
-
     for m in modality_list:
         valid_dataset = EncodedDataset(
-            data_root, data_aug=False, mode="valid", modality=m
+            data_root, data_aug=False, mode="valid", modality=m, sample=0
         )
+        valid_dataset.reload()
         valid_loader = DataLoader(
             valid_dataset, batch_size=valid_batch_size, shuffle=False
         )
@@ -187,13 +204,17 @@ def valid_model(
                 gt2Ds = batch["gt2D"]
                 boxes = batch["bboxes"]
                 filenames = batch["image_name"]
+                box_mask = box_to_mask(boxes.squeeze()).to('cuda')
                 image, gt2Ds, boxes = (
                     image.to(device),
                     gt2Ds.to(device),
                     boxes.to(device),
                 )
                 logits_preds, iou_preds = medsam_lite_model(image, boxes)
+                logits_preds = torch.sigmoid(logits_preds) * box_mask
+                logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
                 pred_masks = torch.sigmoid(logits_preds) > 0.5
+                pred_masks *= box_mask
                 gt_masks = gt2Ds.bool()
                 # ious = cal_iou(pred_mask, gt_mask)
                 tolerance_mm = 2
@@ -231,19 +252,24 @@ def valid_model(
             indices = np.argsort(valid_partial[f"{m}/loss"])[-3:]
             imgs = []
             losses = []
+            filenames = []
             valid_dataset
             for i in indices:
                 item = valid_dataset[i]
                 image = item["image"][None]
                 gt2Ds = item["gt2D"][None]
                 boxes = item["bboxes"][None]
+                box_mask = box_to_mask(boxes.squeeze()[None]).to('cuda')
                 image, gt2Ds, boxes = (
                     image.to(device),
                     gt2Ds.to(device),
                     boxes.to(device),
                 )
                 logits_preds, iou_preds = medsam_lite_model(image, boxes)
+                logits_preds = torch.sigmoid(logits_preds) * box_mask
+                logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
                 pred_masks = torch.sigmoid(logits_preds) > 0.5
+                pred_masks *= box_mask
                 gt_masks = gt2Ds.bool()
                 image = (
                     (image[0].permute(1, 2, 0) * 255)
@@ -289,11 +315,23 @@ def valid_model(
 
                 losses.append(valid_partial[f"{m}/dice loss"][i])
                 imgs.append(img_combined)
+                filenames.append(item['image_name'])
+                
+                board = np.zeros((256,256*3, 3), dtype=np.uint8)
+                board[:,:256] = image
+                board[:,256:512] = cv2.addWeighted(image,0.3, pred_mask, 0.7, 0)
+                board[:,512:] = cv2.addWeighted(image,0.3, gt2D, 0.7, 0)
+                board = cv2.cvtColor(board, cv2.COLOR_RGB2BGR)
+                img_path = mask_dir/wandb.run.name/f'{epoch}'/'valid'/f'{filenames[-1]}.png'
+
+                img_path.parent.mkdir(exist_ok=True, parents=True)
+
+                cv2.imwrite(img_path.as_posix(), board)
             wandb.log(
                 {
                     f"{m} valid": [
-                        wandb.Image(img, caption=f"loss: {l}")
-                        for img, l in zip(imgs, losses)
+                        wandb.Image(img, caption=f"loss: {l} filename:{f}")
+                        for img, l, f in zip(imgs, losses, filenames)
                     ]
                 }
             )
@@ -313,19 +351,38 @@ def valid_model(
 
 
 def train_model(
-    train_loader, loss_fn, medsam_lite_model, optimizer, lr_scheduler, epoch
+    mask_dir, train_dataset, train_loader, loss_fn, medsam_lite_model, optimizer, lr_scheduler, epoch
 ):
 
     medsam_lite_model.train()
     train_epoch_loss = 0
+    modality_loss = {
+        m:[] for m in modality_list
+    }
+    modality_filemap = {
+        m:[] for m in modality_list
+    }
     pbar = tqdm(train_loader)
     for step, batch in enumerate(pbar):
         image = batch["image"]
         gt2Ds = batch["gt2D"]
         boxes = batch["bboxes"]
+        box_mask = box_to_mask(boxes.squeeze()).to(device)
+        image_names = batch['image_name']
         optimizer.zero_grad()
         image, gt2Ds, boxes = image.to(device), gt2Ds.to(device), boxes.to(device)
-        logits_preds, iou_preds = medsam_lite_model(image, boxes)
+        with torch.no_grad():
+            logits_preds, iou_preds = medsam_lite_model(image, boxes)
+            logits_preds = torch.sigmoid(logits_preds) * box_mask
+        logits_preds, iou_preds = medsam_lite_model(image, boxes, logits_preds)
+        # logits_preds, iou_preds = medsam_lite_model(image, boxes)
+        for img_name, logits_pred, gt2D in zip(image_names, logits_preds, gt2Ds):
+            dice_loss = DiceLoss()(logits_pred[None], gt2D[None])
+            for m in modality_loss:
+                if m in img_name:
+                    modality_loss[m].append(dice_loss.detach().cpu().item())
+                    modality_filemap[m].append(img_name)
+                    break
         loss = loss_fn(gt2Ds, logits_preds, iou_preds)
         train_epoch_loss += loss.item()
         loss.backward()
@@ -333,6 +390,76 @@ def train_model(
         pbar.set_description(
             f"Epoch {epoch} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {loss.item():.4f}"
         )
+    with torch.no_grad():
+        for m in modality_loss:
+            top_5 = np.argsort(modality_loss[m])[-5:]
+            for i in top_5:
+                img_name = modality_filemap[m][i]
+                img, gt = train_dataset._load_img(img_name)
+                single_batch = train_dataset._preprocess(img, gt, img_name)
+                image = single_batch["image"]
+                gt2Ds = single_batch["gt2D"]
+                boxes = single_batch["bboxes"]
+                box_mask = box_to_mask(boxes.squeeze()[None]).to(device)
+                image_names = single_batch['image_name']
+                image, gt2Ds, boxes = image.to(device), gt2Ds.to(device), boxes.to(device)
+                logits_preds, iou_preds = medsam_lite_model(image[None], boxes[None])
+                logits_preds = torch.sigmoid(logits_preds) * box_mask
+                logits_preds, iou_preds = medsam_lite_model(image[None], boxes[None], logits_preds)
+                pred_masks = torch.sigmoid(logits_preds) > 0.5
+                gt_masks = gt2Ds.bool()
+                image = (
+                    (image.permute(1, 2, 0) * 255)
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .astype(np.uint8)
+                )
+                pred_mask = ((pred_masks.squeeze()).detach().cpu().numpy()).astype(
+                    np.uint8
+                )
+                gt2D = ((gt_masks.squeeze()).detach().cpu().numpy()).astype(np.uint8)
+                pred_mask = cv2.cvtColor(
+                    (pred_mask * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB
+                )
+                pred_mask[:, :, 1] = 0
+                pred_mask[:, :, 2] = 0
+                gt2D = cv2.cvtColor((gt2D * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB)
+                gt2D[:, :, 0] = 0
+                gt2D[:, :, 1] = 0
+                mask_combined = cv2.addWeighted(pred_mask, 0.5, gt2D, 0.5, 0)
+                img_combined = cv2.addWeighted(image, 0.6, mask_combined, 0.4, 0)
+                ys, xs = np.where(pred_mask[:, :, 0])
+
+                if len(xs) != 0 and len(ys) != 0:
+                    cv2.rectangle(
+                        img_combined,
+                        (xs.min(), ys.min()),
+                        (xs.max(), ys.max()),
+                        (255, 0, 0),
+                        1,
+                    )
+
+                ys, xs = np.where(gt2D[:, :, 2])
+                if len(xs) != 0 and len(ys) != 0:
+                    cv2.rectangle(
+                        img_combined,
+                        (xs.min(), ys.min()),
+                        (xs.max(), ys.max()),
+                        (0, 0, 255),
+                        1,
+                    )
+
+                board = np.zeros((256,256*3, 3), dtype=np.uint8)
+                board[:,:256] = image
+                board[:,256:512] = cv2.addWeighted(image,0.3, pred_mask, 0.7, 0)
+                board[:,512:] = cv2.addWeighted(image,0.3, gt2D, 0.7, 0)
+                board = cv2.cvtColor(board, cv2.COLOR_RGB2BGR)
+                img_path = Path(mask_dir)/wandb.run.name/f'{epoch}'/'train'/f'{img_name}.png'
+
+                img_path.parent.mkdir(exist_ok=True, parents=True)
+
+                cv2.imwrite(img_path.as_posix(), board)
     train_epoch_loss = train_epoch_loss / len(train_loader)
 
     lr_scheduler.step(train_epoch_loss)
@@ -349,21 +476,22 @@ if __name__ == "__main__":
         "D:\\Datas\\competition\\cvpr2024\\train",
         "D:\\Datas\\competition\\cvpr2024\\nuclei",
     ]
+    mask_dir = 'D:\\Datas\\competition\\result'
     # data_root = "/data1/inqlee0704/medsam/train/compressed"
     medsam_lite_checkpoint = "lite_medsam.pth"
-    num_epochs = 100
+    num_epochs = 1000
     batch_size = 8
     num_workers = 4
     device = "cuda"
     bbox_shift = 5
-    lr = 5e-5
+    lr = 1e-3
     weight_decay = 0.01
     iou_loss_weight = 1.0
     seg_loss_weight = 1.0
     ce_loss_weight = 1.0
     do_sancheck = True
     checkpoint = "workdir/temp.pth"
-    # checkpoint = "workdir/medsam_lite_latest.pth"
+    checkpoint = "workdir/medsam_lite_latest.pth"
     debug = False
     makedirs(work_dir, exist_ok=True)
     wandb.init(project="medsam")
@@ -409,6 +537,7 @@ if __name__ == "__main__":
     loss_fn = DefaultLoss(seg_loss_weight, ce_loss_weight, iou_loss_weight)
     main(
         loss_fn,
+        mask_dir,
         image_encoder_cfg=image_encoder_cfg,
         prompt_encoder_cfg=prompt_encoder_cfg,
         mask_decoder_cfg=mask_decoder_cfg,

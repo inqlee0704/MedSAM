@@ -10,13 +10,13 @@ class MedSAM_Lite(nn.Module):
         self.mask_decoder = mask_decoder
         self.prompt_encoder = prompt_encoder
 
-    def forward(self, image, boxes):
+    def forward(self, image, boxes, masks=None):
         image_embedding = self.image_encoder(image)  # (B, 256, 64, 64)
 
         sparse_embeddings, dense_embeddings = self.prompt_encoder(
             points=None,
             boxes=boxes,
-            masks=None,
+            masks=masks,
         )
         low_res_masks, iou_predictions = self.mask_decoder(
             image_embeddings=image_embedding,  # (B, 256, 64, 64)
