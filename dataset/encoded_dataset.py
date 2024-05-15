@@ -176,16 +176,34 @@ class EncodedDataset(Dataset):
         )
 
     def reload(self):
-        sampled_data_list = []
-        for m in self.modality_list:
-            k = min(self.sample, len(self.modality_data_list[m]))
-            print(f"{m}: {k}")
-            sampled_data_list.append(
-                random.choices(self.modality_data_list[m], k=self.sample)
+        with open('D:\\Datas\\competition\\result\\delete_list.xlsx', 'rb') as f:
+            info = pd.read_excel(f)
+        self.filter_list = info.filename.values.tolist()
+        for i, name in enumerate(self.filter_list):
+            if 'train-' in name:
+                self.filter_list[i] = self.filter_list[len('train-'):]
+
+            if 'valid-' in name:
+                self.filter_list[i] = self.filter_list[len('valid-'):]
+
+        # filter_map = {m:[] for m in self.modality_list}
+
+        # for m in self.modality_data_list:
+        #     self.modality_data_list[m] = list(filter(lambda x: x not in filter_list, self.modality_data_list[m]))
+        if self.sample == 0:
+
+            self.sampled_data = np.concatenate(
+                [item for item in self.modality_data_list.values()]
             )
 
-        self.sampled_data = np.concatenate(sampled_data_list)
+        else:
+            sampled_data_list = []
+            for m in self.modality_list:
+                sampled_data_list.append(
+                    random.choices(self.modality_data_list[m], k=min(self.sample, len(self.modality_data_list[m])))
+                )
 
+            self.sampled_data = np.concatenate(sampled_data_list)
     def __len__(self):
         # return len(self.modality_list) * self.sample
         return len(self.sampled_data)
@@ -244,6 +262,20 @@ class EncodedDataset(Dataset):
     def __getitem__(self, index):
 
         img_3c, gt, filename = self._load_data(index)
+        if filename in self.filter_list:
+            while filename in self.filter_list:
+                for m in self.modality_data_list:
+
+                    if filename in self.modality_data_list[m]:
+                        i = self.modality_data_list[m].index(filename)
+                        del self.modality_data_list[m][i]
+                        break
+                filename = random.choice(self.modality_data_list[m])
+            img_3c, gt = self._load_img(filename)
+
+        return self._preprocess(img_3c, gt, filename)
+
+    def _preprocess(self, img_3c, gt, filename):
         img_resize = self.resize_longest_side(img_3c)
         # Resizing
         img_resize = (img_resize - img_resize.min()) / np.clip(
@@ -303,6 +335,7 @@ class EncodedDataset(Dataset):
                 np.array([img_3c.shape[0], img_3c.shape[1]])
             ).long(),
         }
+
 
     def resize_longest_side(self, image):
         """

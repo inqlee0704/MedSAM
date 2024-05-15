@@ -406,10 +406,10 @@ if __name__ == "__main__":
         "D:\\Datas\\competition\\cvpr2024\\train",
         "D:\\Datas\\competition\\cvpr2024\\nuclei",
     ]
-    data_root = [
-        # "/data1/inqlee0704/medsam/train/compressed",
-        # "/data1/inqlee0704/medsam/train/nuclei",
-    ]
+    # data_root = [
+    #     # "/data1/inqlee0704/medsam/train/compressed",
+    #     # "/data1/inqlee0704/medsam/train/nuclei",
+    # ]
     # medsam_lite_checkpoint = "lite_medsam.pth"
     num_epochs = 1000
     batch_size = 32
