@@ -65,6 +65,14 @@ def anisotropic_diffusion(img, num_iter, kappa, gamma=0.1):
     # Rescale back to 8-bit image values
     return (diffused_img * 255).astype(np.uint8)
 
+def preprocess(img):
+    img = (img-img.min())/(img.max()-img.min()) * 255
+    gray_img = rgb2gray(img)
+
+    diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+    equalized_img = cv2.equalizeHist(gray_img)
+    merged_img = cv2.merge((gray_img, diffused_img, equalized_img))
+    return merged_img
 
 def rgb2gray(rgb):
     return np.array(
@@ -101,9 +109,9 @@ parser.add_argument(
 parser.add_argument(
     "-lite_medsam_checkpoint_path",
     type=str,
-    default="/home/inqlee0704/medsam/MedSAM/workdir/warm-durian-85/efficientvit_sam_best.pth",
+    # default="/home/inqlee0704/medsam/MedSAM/workdir/warm-durian-85/efficientvit_sam_best.pth",
     # default="/home/inqlee0704/medsam/MedSAM/workdir/eternal-silence-73/medsam_lite_best.pth",
-    # default="work_dir/LiteMedSAM/lite_medsam.pth",
+    default="workdir/efficientvit_sam_best.pth",
     help="path to the checkpoint of MedSAM-Lite",
 )
 parser.add_argument(
@@ -384,7 +392,7 @@ def medsam_inference(medsam_model, img_embed, box_256, new_size, original_size):
     )
     low_res_pred = torch.sigmoid(low_res_pred)
     low_res_pred = low_res_pred.squeeze().cpu().numpy()
-    medsam_seg = (low_res_pred > 0.5).astype(np.uint8)
+    medsam_seg = (low_res_pred > 0.5).astype(np.uint16)
 
     return medsam_seg, iou
 
@@ -411,7 +419,7 @@ medsam_lite_image_encoder = TinyViT(
 )
 
 efficientvit_sam = create_sam_model(
-name="l0", weight_url="../efficientvit/assets/checkpoints/sam/l0.pt",
+name="l0", weight_url="./l0.pt",
 )
 medsam_lite_prompt_encoder = PromptEncoder(
     embed_dim=256,
@@ -452,16 +460,17 @@ def MedSAM_infer_npz_2D(img_npz_file):
     npz_data = np.load(img_npz_file, "r", allow_pickle=True)  # (H, W, 3)
     img_3c = npz_data["imgs"]  # (H, W, 3)
     # preprocess image
-    gray_img = rgb2gray(img_3c)
-    diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
-    equalized_img = cv2.equalizeHist(gray_img)
-    img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
+    # gray_img = rgb2gray(img_3c)
+    # diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+    # equalized_img = cv2.equalizeHist(gray_img)
+    # img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
+    img_3c = preprocess(img_3c)
     assert (
         np.max(img_3c) < 256
     ), f"input data should be in range [0, 255], but got {np.unique(img_3c)}"
     H, W = img_3c.shape[:2]
     boxes = npz_data["boxes"]
-    segs = np.zeros(img_3c.shape[:2], dtype=np.uint8)
+    segs = np.zeros(img_3c.shape[:2], dtype=np.uint16)
 
     ## preprocessing
     img_256 = resize_longest_side(img_3c, 256)
@@ -504,7 +513,7 @@ def MedSAM_infer_npz_2D(img_npz_file):
             color = np.random.rand(3)
             box_viz = box
             show_box(box_viz, ax[1], edgecolor=color)
-            show_mask((segs == i + 1).astype(np.uint8), ax[1], mask_color=color)
+            show_mask((segs == i + 1).astype(np.uint16), ax[1], mask_color=color)
 
         plt.tight_layout()
         plt.savefig(join(png_save_dir, npz_name.split(".")[0] + ".png"), dpi=300)
@@ -518,11 +527,11 @@ def MedSAM_infer_npz_3D(img_npz_file):
     spacing = npz_data[
         "spacing"
     ]  # not used in this demo because it treats each slice independently
-    segs = np.zeros_like(img_3D, dtype=np.uint8)
+    segs = np.zeros_like(img_3D, dtype=np.uint16)
     boxes_3D = npz_data["boxes"]  # [[x_min, y_min, z_min, x_max, y_max, z_max]]
 
     for idx, box3D in enumerate(boxes_3D, start=1):
-        segs_3d_temp = np.zeros_like(img_3D, dtype=np.uint8)
+        segs_3d_temp = np.zeros_like(img_3D, dtype=np.uint16)
         x_min, y_min, z_min, x_max, y_max, z_max = box3D
         assert (
             z_min < z_max
@@ -539,10 +548,11 @@ def MedSAM_infer_npz_3D(img_npz_file):
             else:
                 img_3c = img_2d
             # preprocess image
-            gray_img = rgb2gray(img_3c)
-            diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
-            equalized_img = cv2.equalizeHist(gray_img)
-            img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
+            img_3c = preprocess(img_3c)
+            # gray_img = rgb2gray(img_3c)
+            # diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+            # equalized_img = cv2.equalizeHist(gray_img)
+            # img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
             H, W, _ = img_3c.shape
 
             img_256 = resize_longest_side(img_3c, 256)
@@ -587,10 +597,11 @@ def MedSAM_infer_npz_3D(img_npz_file):
             else:
                 img_3c = img_2d
             # preprocess image
-            gray_img = rgb2gray(img_3c)
-            diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
-            equalized_img = cv2.equalizeHist(gray_img)
-            img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
+            img_3c = preprocess(img_3c)
+            # gray_img = rgb2gray(img_3c)
+            # diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+            # equalized_img = cv2.equalizeHist(gray_img)
+            # img_3c = cv2.merge((gray_img, diffused_img, equalized_img))
             H, W, _ = img_3c.shape
 
             img_256 = resize_longest_side(img_3c)
@@ -663,8 +674,8 @@ if __name__ == "__main__":
         if basename(img_npz_file).startswith("3D"):
             MedSAM_infer_npz_3D(img_npz_file)
         else:
-            continue
-            # MedSAM_infer_npz_2D(img_npz_file)
+            # continue
+            MedSAM_infer_npz_2D(img_npz_file)
         end_time = time()
         efficiency["case"].append(basename(img_npz_file))
         efficiency["time"].append(end_time - start_time)

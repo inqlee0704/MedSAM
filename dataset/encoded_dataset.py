@@ -170,7 +170,7 @@ class EncodedDataset(Dataset):
         }
         # self.data_glob={modality: self.img_path.glob(f'{modality}_*') for modality in modality_list}
 
-        # self.reload()
+        self.reload()
         self.sampled_data = np.concatenate(
             [item for item in self.modality_data_list.values()]
         )

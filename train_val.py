@@ -128,15 +128,16 @@ def main(loss_fn, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_cfg):
 
     # checkpoint = "l0.pt"
     # # workdir/medsam_lite_best22.pth"
-    # # checkpoint = "workdir/medsam_lite_latest.pth"
-    # if checkpoint and isfile(checkpoint):
-    #     print(f"Resuming from checkpoint {checkpoint}")
-    #     checkpoint = torch.load(checkpoint)
-    #     medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
-    #     optimizer.load_state_dict(checkpoint["optimizer"])
-    #     # start_epoch = checkpoint["epoch"]
-    #     best_loss = checkpoint["loss"]
-        # print(f"Loaded checkpoint from epoch {start_epoch}")
+    checkpoint = "workdir/medsam_lite_best.pth"
+    # andmedsam_lite_latest.pth"
+    if checkpoint and isfile(checkpoint):
+        print(f"Resuming from checkpoint {checkpoint}")
+        checkpoint = torch.load(checkpoint)
+        medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        # start_epoch = checkpoint["epoch"]
+        best_loss = checkpoint["loss"]
+        print(f"Loaded checkpoint from epoch {start_epoch}")
 
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.9, patience=5, cooldown=0
