@@ -129,7 +129,7 @@ def main(loss_fn, mask_dir, prompt_encoder_cfg, mask_decoder_cfg):
 
     # checkpoint = "l0.pt"
     # # workdir/medsam_lite_best22.pth"
-    checkpoint = "workdir/efficientvit_sam_best.pth"
+    checkpoint = "workdir/efficientvit_sam_latest.pth"
     # andmedsam_lite_latest.pth"
     if checkpoint and isfile(checkpoint):
         print(f"Resuming from checkpoint {checkpoint}")
@@ -155,30 +155,34 @@ def main(loss_fn, mask_dir, prompt_encoder_cfg, mask_decoder_cfg):
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
     # * Dataloader
     total_modality_list = modality_list
-    for epoch in tqdm(range(start_epoch + 1, num_epochs)):
+    epoch=0
+    scoring(
+        loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss, mask_dir, top_k
+    )
+    # for epoch in tqdm(range(start_epoch + 1, num_epochs)):
 
-        valid_metrics, best_loss = valid_model(
-            loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss, mask_dir, top_k
-        )
+    #     valid_metrics, best_loss = valid_model(
+    #         loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss, mask_dir, top_k
+    #     )
 
-        train_dataset.modality_list = total_modality_list
-        train_dataset.reload()  # sample per modality
+    #     train_dataset.modality_list = total_modality_list
+    #     train_dataset.reload()  # sample per modality
 
-        train_metrics = train_model(
-            mask_dir,
-            train_dataset,
-            train_loader,
-            loss_fn,
-            medsam_lite_model,
-            optimizer,
-            lr_scheduler,
-            epoch,
-            top_k,
-        )
-        metrics = {}
-        metrics.update(valid_metrics)
-        metrics.update(train_metrics)
-        wandb.log(metrics)
+    #     train_metrics = train_model(
+    #         mask_dir,
+    #         train_dataset,
+    #         train_loader,
+    #         loss_fn,
+    #         medsam_lite_model,
+    #         optimizer,
+    #         lr_scheduler,
+    #         epoch,
+    #         top_k,
+    #     )
+    #     metrics = {}
+    #     metrics.update(valid_metrics)
+    #     metrics.update(train_metrics)
+    #     wandb.log(metrics)
 
 
 
@@ -193,6 +197,87 @@ def extract_exclude_modalities(valid_metrics, top_k):
     exclude_indices = np.argsort(losses)[:top_k]
     exclude_modalites = [modalities[i] for i in exclude_indices]
     return exclude_modalites
+
+def scoring(
+    loss_fn, valid_batch_size, medsam_lite_model, optimizer, epoch, best_loss, mask_dir, top_k
+):
+    valid_partial = {}
+
+    valid_partial_count = {m: 0 for m in modality_list}
+    medsam_lite_model.eval()
+
+    spacing = [1.0, 1.0, 1.0]
+    valid_epoch_loss = 0
+    valid_count = 0
+
+    for m in modality_list:
+        valid_dataset = EncodedDataset(
+            data_root,
+            data_aug=False,
+            mode="valid",
+            # sample=100,
+            sample=1000,
+            modality=m,
+            # data_root, data_aug=False, mode="valid", modality=m
+        )
+        valid_loader = DataLoader(
+            valid_dataset, batch_size=valid_batch_size, shuffle=False
+        )
+        # valid
+        valid_partial[f"{m}/iou"] = []
+        valid_partial[f"{m}/dcs"] = []
+        valid_partial[f"{m}/nsd"] = []
+        valid_partial[f"{m}/loss"] = []
+        valid_partial[f"{m}/dice loss"] = []
+
+        with torch.no_grad():
+            pbar = tqdm(valid_loader)
+            for step, batch in enumerate(pbar):
+                image = batch["image"]
+                gt2Ds = batch["gt2D"]
+                boxes = batch["bboxes"]
+                filenames = batch["image_name"]
+                image, gt2Ds, boxes = (
+                    image.to(device),
+                    gt2Ds.to(device),
+                    boxes.to(device),
+                )
+                logits_preds, iou_preds = medsam_lite_model(image, boxes)
+                pred_masks = torch.sigmoid(logits_preds) > 0.5
+                gt_masks = gt2Ds.bool()
+                # ious = cal_iou(pred_mask, gt_mask)
+                tolerance_mm = 2
+                for fn, pred_mask, gt_mask, logits_pred, iou_pred, gt2D in zip(
+                    filenames, pred_masks, gt_masks, logits_preds, iou_preds, gt2Ds
+                ):
+                    # surface_distances = compute_surface_distances(
+                    # gt_mask, pred_mask, spacing
+                    # )
+                    surface_distances = compute_surface_distances(
+                        gt_mask.to("cpu").numpy(),
+                        pred_mask.to("cpu").numpy(),
+                        spacing,
+                    )
+                    nsd = compute_surface_dice_at_tolerance(
+                        surface_distances, tolerance_mm
+                    )
+                    dcs = compute_dice_coefficient(gt_mask, pred_mask)
+
+                    valid_partial[f"{m}/nsd"].append(nsd.item())
+                    valid_partial[f"{m}/dcs"].append(dcs.item())
+
+                print(m, np.mean(valid_partial[f'{m}/dcs']))
+                valid_partial[f'{m}/mean_dcs'] = np.mean(valid_partial[f'{m}/dcs'])
+                valid_partial[f'{m}/mean_nsd(t=2)'] = np.mean(valid_partial[f'{m}/nsd'])
+                print(m, np.mean(valid_partial[f'{m}/nsd(t=2)']))
+    df = pd.DataFrame(valid_partial, columns=list(valid_partial.keys()))
+    df.to_csv('base_model.csv')
+                    # valid_partial_count[m] += 1
+                    # valid_count += 1
+                # modality_loss = np.mean(valid_partial[f"{m}/loss"])
+                # pbar.set_description(
+                #     f"Epoch {epoch} - {m} at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}, loss: {modality_loss:.4f}"
+                # )
 
 
 def valid_model(
@@ -304,6 +389,7 @@ def valid_model(
                     np.uint8
                 )
                 gt2D = ((gt_masks.squeeze()).detach().cpu().numpy()).astype(np.uint8)
+                gt2D = cv2.cvtColor((gt2D * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB)
                 pred_mask = cv2.cvtColor(
                     (pred_mask * 255).astype(np.uint8), cv2.COLOR_GRAY2RGB
                 )
@@ -314,8 +400,8 @@ def valid_model(
                 board[:,512:] = cv2.addWeighted(image,0.3, gt2D, 0.7, 0)
                 board = cv2.cvtColor(board, cv2.COLOR_RGB2BGR)
 
-                img_path = Path(mask_dir)/wandb.run.name/f'{epoch}'/'train'/f'{img_name}.png'
-
+                img_path = Path(mask_dir)/wandb.run.name/f'{epoch}'/'valid'/f'{img_name}.png'
+                img_path.parent.mkdir(exist_ok=True, parents=True)
                 cv2.imwrite(img_path.as_posix(), board)
 
                 losses.append(valid_partial[f"{m}/dice loss"][i])
@@ -461,10 +547,22 @@ def train_model(
 
 if __name__ == "__main__":
     work_dir = "./workdir"
+    root_dir = Path()
     data_root = [
         "D:\\Datas\\competition\\cvpr2024\\train",
         "D:\\Datas\\competition\\cvpr2024\\nuclei",
+        "D:\\Datas\\competition\\cvpr2024\\btcv",
+        "D:\\Datas\\competition\\cvpr2024\\hipxray",
+        "D:\\Datas\\competition\\cvpr2024\\microUS",
+        "D:\\Datas\\competition\\cvpr2024\\teeth",
     ]
+    # data_root = [
+    #     "/data1/inqlee0704/medsam/train/compressed",
+    #     "/data1/inqlee0704/medsam/train/nuclei",
+    #     "/data1/inqlee0704/medsam/train/btcv",
+    #     "/data1/inqlee0704/medsam/train/hipxray",
+    #     "/data1/inqlee0704/medsam/train/microUS",
+    # ]
     # data_root = [
     #     # "/data1/inqlee0704/medsam/train/compressed",
     #     # "/data1/inqlee0704/medsam/train/nuclei",
@@ -475,7 +573,7 @@ if __name__ == "__main__":
     num_workers = 8
     device = "cuda"
     bbox_shift = 5
-    lr = 5e-5
+    lr = 2e-5
     weight_decay = 0.01
     iou_loss_weight = 1.0
     seg_loss_weight = 1.0

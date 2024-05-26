@@ -111,7 +111,8 @@ parser.add_argument(
     type=str,
     # default="/home/inqlee0704/medsam/MedSAM/workdir/warm-durian-85/efficientvit_sam_best.pth",
     # default="/home/inqlee0704/medsam/MedSAM/workdir/eternal-silence-73/medsam_lite_best.pth",
-    default="workdir/efficientvit_sam_best.pth",
+    # default="inqlee/efficientvit_sam_best.pth",
+    default="work_dir/LiteMedSAM/efficientvit_samMicre_best.pth",
     help="path to the checkpoint of MedSAM-Lite",
 )
 parser.add_argument(
