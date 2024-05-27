@@ -83,7 +83,6 @@ def rle_decode_multivalue(runs, shape):
 
 _modality_list = [
     "teeth",
-    "CT",
     "CT_AMOS",
     "CT_AbdTumor",
     "CT_AbdomenCT",
@@ -109,7 +108,6 @@ _modality_list = [
     "Fundus",
     "Mammo",
     "Microscopy",
-    "MR",
     "OCT",
     "PET",
     "US",
@@ -228,14 +226,14 @@ class EncodedDataset(Dataset):
 
     def _load_processed_img(self, img_path):
         color_img = cv2.imread(img_path, cv2.IMREAD_COLOR)
-        if np.all(color_img[:,:,0] == color_img[:,:,1]):
-            gray_img = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY)
-            diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
-            equalized_img = cv2.equalizeHist(gray_img)
-            merged_img = cv2.merge((gray_img, diffused_img, equalized_img))
-        else:
-            merged_img = color_img
-        return merged_img
+        # if np.all(color_img[:,:,0] == color_img[:,:,1]):
+        #     gray_img = cv2.cvtColor(color_img, cv2.COLOR_BGR2GRAY)
+        #     diffused_img = anisotropic_diffusion(gray_img, num_iter=1, kappa=20)
+        #     equalized_img = cv2.equalizeHist(gray_img)
+        #     merged_img = cv2.merge((gray_img, diffused_img, equalized_img))
+        # else:
+        #     merged_img = color_img
+        return color_img
 
     def _load_img(self, filename):
         # img_path = next(self.img_path.glob(f'{img_path}*'))
