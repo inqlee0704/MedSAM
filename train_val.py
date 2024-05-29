@@ -1,4 +1,6 @@
 import argparse
+import torch.quantization
+import torch
 import json
 from pathlib import Path
 import os
@@ -96,17 +98,17 @@ def main(loss_fn, mask_dir, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_
     best_loss = 1e10
     # * Network
 
-    # efficientvit_sam = create_sam_model(
-    # name="l0", weight_url="./l0.pt",
-    # )
+    efficientvit_sam = create_sam_model(
+    name="l0", weight_url="./l0.pt",
+    )
 
-    medsam_lite_image_encoder = TinyViT(**image_encoder_cfg)
+    # medsam_lite_image_encoder = TinyViT(**image_encoder_cfg)
     medsam_lite_prompt_encoder = PromptEncoder(**prompt_encoder_cfg)
     medsam_lite_mask_decoder = MaskDecoder(**mask_decoder_cfg)
 
     medsam_lite_model = MedSAM_Lite(
-        # efficientvit_sam.image_encoder,
-        image_encoder=medsam_lite_image_encoder,
+        efficientvit_sam.image_encoder,
+        # image_encoder=medsam_lite_image_encoder,
         mask_decoder=medsam_lite_mask_decoder,
         prompt_encoder=medsam_lite_prompt_encoder,
     )
@@ -129,23 +131,29 @@ def main(loss_fn, mask_dir, image_encoder_cfg, prompt_encoder_cfg, mask_decoder_
     #     medsam_lite_ckpt = torch.load(pretrained_checkpoint, map_location="cpu")
     #     medsam_lite_model.load_state_dict(medsam_lite_ckpt, strict=True)
 
-    checkpoint = 'workdir/lite_medsam.pth'
-    medsam_lite_model.load_state_dict(torch.load(checkpoint))
+    # checkpoint = 'workdir/lite_medsam.pth'
+    # medsam_lite_model.load_state_dict(torch.load(checkpoint))
     # checkpoint = "l0.pt"
     # # workdir/medsam_lite_best22.pth"
-    # checkpoint = "workdir/efficientvit_sam_latest.pth"
+    checkpoint = "inqlee/efficientvit_sam_best.pth"
+    # inqlee/efficientvit_sam_best.pth
     # andmedsam_lite_latest.pth"
-    # if checkpoint and isfile(checkpoint):
-    #     print(f"Resuming from checkpoint {checkpoint}")
-    #     checkpoint = torch.load(checkpoint)
-    #     medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
-    #     optimizer.load_state_dict(checkpoint["optimizer"])
-    #     # start_epoch = checkpoint["epoch"]
-    #     best_loss = checkpoint["loss"]
-    #     print(f"Loaded checkpoint from epoch {start_epoch}")
+    if checkpoint and isfile(checkpoint):
+        print(f"Resuming from checkpoint {checkpoint}")
+        checkpoint = torch.load(checkpoint)
+        medsam_lite_model.load_state_dict(checkpoint["model"], strict=True)
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        # start_epoch = checkpoint["epoch"]
+        best_loss = checkpoint["loss"]
+        print(f"Loaded checkpoint from epoch {start_epoch}")
 
     lr_scheduler = optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.9, patience=5, cooldown=0
+    )
+    medsam_lite_model.eval()
+    medsam_lite_model.to('cpu')
+    medsam_lite_model = torch.quantization.quantize_dynamic(
+        medsam_lite_model, {torch.nn.Linear}, dtype=torch.qint8
     )
 
     top_k = 5
@@ -281,7 +289,7 @@ def scoring(
         valid_metrics[f'{m}/mean_nsd(t=2)'] = np.mean(valid_partial[f'{m}/nsd'])
     valid_metrics['time'] = np.mean(time_list)
     # df = pd.DataFrame(valid_metrics, columns=list(valid_metrics.keys()))
-    with open('base_model.csv', 'w') as f:
+    with open('quant_efficient_model.json', 'w') as f:
         json.dump(valid_metrics, f)
                     # valid_partial_count[m] += 1
                     # valid_count += 1
